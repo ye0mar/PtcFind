@@ -1,11 +1,17 @@
 <?php
-require_once __DIR__ . '/config/database.php';
-require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/includes/csrf.php';
+/**
+ * Logout Handler
+ * FoundU - Lost & Found Management System
+ */
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    csrf_require($_POST['_csrf'] ?? null);
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/flash_messages.php';
+
+logout_user();
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+    session_regenerate_id(true);
 }
-logout_user($pdo);
-header('Location: ' . BASE_URL . '/login.php');
+set_flash('info', 'You have been successfully logged out.');
+header('Location: ' . base_url('login.php'));
 exit;

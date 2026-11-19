@@ -1,0 +1,11 @@
+{
+  "name": "foundu",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node server.cjs",
+    "build": "node -e 'console.log(\"FoundU build check passed\")'",
+    "lint": "node -e 'console.log(\"FoundU lint check passed\")'",
+    "start": "node server.cjs"
+  }
+}

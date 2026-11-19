@@ -1,0 +1,126 @@
+{
+  "loggedInUserId": 1,
+  "settings": {
+    "system_name": "FoundU - Lost & Found Management System",
+    "organization_name": "Pateros Technological College",
+    "items_per_page": "15"
+  },
+  "users": [
+    {
+      "id": 1,
+      "full_name": "System Administrator",
+      "username": "admin",
+      "email": "admin@foundu.edu",
+      "password": "admin123",
+      "role": "admin",
+      "status": "active",
+      "last_login": "2026-11-18 09:30:00",
+      "created_at": "2026-11-01 08:00:00"
+    },
+    {
+      "id": 2,
+      "full_name": "Campus Staff Officer",
+      "username": "staff",
+      "email": "staff@foundu.edu",
+      "password": "staff123",
+      "role": "staff",
+      "status": "active",
+      "last_login": "2026-11-17 14:15:00",
+      "created_at": "2026-11-02 09:00:00"
+    }
+  ],
+  "lostItems": [
+    {
+      "id": 1,
+      "item_name": "MacBook Pro 14\"",
+      "category_id": 1,
+      "description": "Space Gray, sticker of campus tech club on back lid",
+      "date_lost": "2026-11-15",
+      "location_lost": "Main Library - 2nd Floor",
+      "contact_info": "john.student@foundu.edu",
+      "image_path": null,
+      "status": "open",
+      "reported_by": 1,
+      "created_at": "2026-11-15 10:20:00",
+      "updated_at": null
+    },
+    {
+      "id": 2,
+      "item_name": "Brown Leather Bi-fold Wallet",
+      "category_id": 2,
+      "description": "Contains student ID and transit card",
+      "date_lost": "2026-11-16",
+      "location_lost": "University Cafeteria",
+      "contact_info": "sarah.k@foundu.edu",
+      "image_path": null,
+      "status": "open",
+      "reported_by": 1,
+      "created_at": "2026-11-16 13:45:00",
+      "updated_at": null
+    }
+  ],
+  "foundItems": [
+    {
+      "id": 1,
+      "item_name": "Apple Laptop (MacBook)",
+      "category_id": 1,
+      "description": "Space Gray MacBook found in library study lounge 4",
+      "date_found": "2026-11-15",
+      "location_found": "Library 2nd Floor",
+      "storage_location": "Security Locker #12",
+      "notes": "Turned in by student assistant",
+      "image_path": null,
+      "status": "available",
+      "recorded_by": 1,
+      "created_at": "2026-11-15 11:05:00",
+      "updated_at": null
+    },
+    {
+      "id": 2,
+      "item_name": "Blue Hydro Flask Bottle",
+      "category_id": 10,
+      "description": "32oz water bottle with mountain climbing stickers",
+      "date_found": "2026-11-17",
+      "location_found": "Gymnasium Bleachers",
+      "storage_location": "Storage Bin A-3",
+      "notes": "Cleaned and safely stored",
+      "image_path": null,
+      "status": "available",
+      "recorded_by": 1,
+      "created_at": "2026-11-17 16:10:00",
+      "updated_at": null
+    }
+  ],
+  "matches": [],
+  "activityLogs": [
+    {
+      "id": 2,
+      "user_id": 1,
+      "action": "UPDATE_SETTINGS",
+      "target_type": "system_settings",
+      "target_id": null,
+      "details": "Updated system settings (Name: FoundU - Lost & Found Management System)",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-19 08:38:03"
+    },
+    {
+      "id": 1,
+      "user_id": 1,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 1,
+      "details": "User admin logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-18 09:30:00"
+    }
+  ],
+  "backupLogs": [],
+  "nextIds": {
+    "lost": 3,
+    "found": 3,
+    "match": 1,
+    "user": 3,
+    "log": 3,
+    "backup": 1
+  }
+}

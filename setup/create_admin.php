@@ -1,45 +1,50 @@
 <?php
-// ============================================================
-// One-time Admin Setup Script
-// ============================================================
+/**
+ * Initial Administrator Seeding Utility
+ * FoundU - Lost & Found Management System
+ * Run in browser via: http://localhost/foundu/setup/create_admin.php
+ */
+
 require_once __DIR__ . '/../config/database.php';
-require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/csrf.php';
 
 $message = '';
-$error = '';
-$created = false;
+$status = '';
 
-$db = getDB();
-$adminCount = $db->query("SELECT COUNT(*) FROM users WHERE role='admin'")->fetchColumn();
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    check_csrf();
+    $fullName = trim($_POST['full_name'] ?? 'System Administrator');
+    $username = trim($_POST['username'] ?? 'admin');
+    $email    = trim($_POST['email'] ?? 'admin@foundu.edu');
+    $password = $_POST['password'] ?? 'admin123';
 
-if ($adminCount > 0) {
-    $error = 'An administrator account already exists. This setup page is disabled for security.';
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $adminCount === 0) {
-    $full_name = trim($_POST['full_name'] ?? '');
-    $username = trim($_POST['username'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $password = $_POST['password'] ?? '';
-    $confirm = $_POST['confirm_password'] ?? '';
-
-    if ($full_name === '' || $username === '' || $password === '') {
-        $error = 'All required fields must be filled.';
-    } elseif (strlen($password) < 6) {
-        $error = 'Password must be at least 6 characters.';
-    } elseif ($password !== $confirm) {
-        $error = 'Passwords do not match.';
-    } elseif (!preg_match('/^[a-zA-Z0-9_]+$/', $username)) {
-        $error = 'Username can only contain letters, numbers, and underscores.';
+    if (empty($username) || empty($password)) {
+        $message = 'Username and password are required.';
+        $status = 'danger';
     } else {
         try {
+            $pdo = get_db_connection();
             $hash = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $db->prepare("INSERT INTO users (full_name, username, email, password_hash, role, status) VALUES (?, ?, ?, ?, 'admin', 'active')");
-            $stmt->execute([$full_name, $username, $email ?: null, $hash]);
-            $created = true;
-            $message = 'Administrator account created successfully. You can now log in.';
+
+            $stmt = $pdo->prepare("SELECT id FROM users WHERE username = :u LIMIT 1");
+            $stmt->execute([':u' => $username]);
+            $existing = $stmt->fetch();
+
+            if ($existing) {
+                // Update password
+                $up = $pdo->prepare("UPDATE users SET full_name = :fn, email = :em, password_hash = :ph, role = 'admin', status = 'active', updated_at = NOW() WHERE id = :id");
+                $up->execute([':fn' => $fullName, ':em' => $email, ':ph' => $hash, ':id' => $existing['id']]);
+                $message = "Admin user '{$username}' password was reset successfully!";
+                $status = 'success';
+            } else {
+                $ins = $pdo->prepare("INSERT INTO users (full_name, username, email, password_hash, role, status, created_at) VALUES (:fn, :un, :em, :ph, 'admin', 'active', NOW())");
+                $ins->execute([':fn' => $fullName, ':un' => $username, ':em' => $email, ':ph' => $hash]);
+                $message = "New administrator '{$username}' created successfully!";
+                $status = 'success';
+            }
         } catch (Exception $e) {
-            $error = 'Failed to create admin: ' . $e->getMessage();
+            $message = 'Database error: ' . $e->getMessage();
+            $status = 'danger';
         }
     }
 }
@@ -47,54 +52,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $adminCount === 0) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Create Administrator — Lost and Found</title>
-<link rel="stylesheet" href="../assets/css/style.css">
-<link rel="stylesheet" href="../assets/css/auth.css">
-<style>
-.setup-container { max-width: 500px; margin: 50px auto; padding: 20px; }
-.warning-box { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Administrator - FoundU</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="../assets/css/forms.css">
 </head>
-<body class="auth-page">
-<div class="setup-container">
-    <h1>Initial Administrator Setup</h1>
-    <div class="warning-box">
-        <strong>Important:</strong> This page should only be used once to create the first administrator account. After creation, delete or restrict access to this file.
-    </div>
+<body class="bg-light d-flex align-items-center min-vh-100 py-5">
+    <div class="container" style="max-width: 500px;">
+        <div class="card p-4 p-sm-5">
+            <h3 class="font-display fw-semibold text-primary mb-1">FoundU Setup</h3>
+            <p class="font-meta text-muted small mb-4">Initialize or reset the administrator account in MySQL.</p>
 
-    <?php if ($error): ?>
-        <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
-    <?php endif; ?>
-    <?php if ($created): ?>
-        <div class="alert alert-success"><?php echo htmlspecialchars($message); ?></div>
-        <p><a href="../login.php">Go to Login →</a></p>
-    <?php else: ?>
-        <form method="POST" class="auth-form">
-            <div class="form-group">
-                <label>Full Name *</label>
-                <input type="text" name="full_name" required maxlength="150">
-            </div>
-            <div class="form-group">
-                <label>Username *</label>
-                <input type="text" name="username" required minlength="3" maxlength="50" pattern="[a-zA-Z0-9_]+">
-            </div>
-            <div class="form-group">
-                <label>Email (optional)</label>
-                <input type="email" name="email" maxlength="150">
-            </div>
-            <div class="form-group">
-                <label>Password *</label>
-                <input type="password" name="password" required minlength="6">
-                <small>Minimum 6 characters. Choose a strong password.</small>
-            </div>
-            <div class="form-group">
-                <label>Confirm Password *</label>
-                <input type="password" name="confirm_password" required>
-            </div>
-            <button type="submit" class="btn btn-primary btn-block">Create Administrator</button>
-        </form>
-    <?php endif; ?>
-</div>
+            <?php if (!empty($message)): ?>
+                <div class="alert alert-<?= $status ?> small mb-4"><?= htmlspecialchars($message) ?></div>
+            <?php endif; ?>
+
+            <form method="POST">
+                <?= csrf_field() ?>
+                <div class="mb-3">
+                    <label class="form-label small">Full Name</label>
+                    <input type="text" class="form-control" name="full_name" value="System Administrator" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small">Username</label>
+                    <input type="text" class="form-control" name="username" value="admin" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small">Email Address</label>
+                    <input type="email" class="form-control" name="email" value="admin@foundu.edu">
+                </div>
+                <div class="mb-4">
+                    <label class="form-label small">Password</label>
+                    <input type="text" class="form-control" name="password" value="admin123" required>
+                </div>
+                <div class="d-grid gap-2">
+                    <button type="submit" class="btn btn-primary py-2">Create / Reset Admin</button>
+                    <a href="../login.php" class="btn btn-outline-secondary py-2 small">Go to Login</a>
+                </div>
+            </form>
+        </div>
+    </div>
 </body>
 </html>

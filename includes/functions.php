@@ -1,153 +1,177 @@
 <?php
-// =========================================================
-// SHARED HELPER FUNCTIONS
-// =========================================================
+/**
+ * Global Utility Functions
+ * FoundU - Lost & Found Management System
+ */
+
+require_once __DIR__ . '/../config/database.php';
 
 /**
- * Safe output escaping (HTML context).
+ * Sanitize string output for safe HTML display.
  */
-function e($value): string {
-    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+function sanitize(?string $data): string {
+    return htmlspecialchars($data ?? '', ENT_QUOTES, 'UTF-8');
 }
 
 /**
- * Format a date for display.
+ * Format date string into human-readable format.
  */
-function format_date($value): string {
-    if (empty($value)) return '—';
-    $ts = is_numeric($value) ? $value : strtotime($value);
-    return $ts ? date('M d, Y', $ts) : '—';
+function format_date(?string $dateStr, string $format = 'M d, Y'): string {
+    if (empty($dateStr)) return '—';
+    $timestamp = strtotime($dateStr);
+    return $timestamp ? date($format, $timestamp) : $dateStr;
 }
 
 /**
- * Format a datetime for display.
+ * Format datetime string into human-readable format.
  */
-function format_datetime($value): string {
-    if (empty($value)) return '—';
-    $ts = is_numeric($value) ? $value : strtotime($value);
-    return $ts ? date('M d, Y • h:i A', $ts) : '—';
+function format_datetime(?string $dateTimeStr, string $format = 'M d, Y h:i A'): string {
+    if (empty($dateTimeStr)) return '—';
+    $timestamp = strtotime($dateTimeStr);
+    return $timestamp ? date($format, $timestamp) : $dateTimeStr;
 }
 
 /**
- * Status badge HTML.
+ * Log activity in activity_logs table.
  */
-function status_badge(string $status): string {
-    $map = [
-        'open'      => ['Open',      'badge-warn'],
-        'available' => ['Available', 'badge-info'],
-        'matched'   => ['Matched',   'badge-blue'],
-        'returned'  => ['Returned',  'badge-success'],
-        'closed'    => ['Closed',    'badge-muted'],
-    ];
-    $info = $map[$status] ?? [$status, 'badge-muted'];
-    return '<span class="badge ' . $info[1] . '">' . e($info[0]) . '</span>';
-}
+function log_activity(string $action, ?string $targetType = null, ?int $targetId = null, ?string $details = null): bool {
+    try {
+        $pdo = get_db_connection();
+        $userId = $_SESSION['user_id'] ?? null;
+        $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
 
-/**
- * Get the logo URL (uses picture/logo.jpg).
- */
-function logo_url(): string {
-    return BASE_URL . '/picture/logo.jpg';
-}
-
-/**
- * Get categories from DB.
- */
-function get_categories(PDO $pdo): array {
-    $stmt = $pdo->query("SELECT id, name FROM categories ORDER BY name ASC");
-    return $stmt->fetchAll();
-}
-
-/**
- * Handle image upload. Returns stored path relative to uploads/ or null.
- */
-function handle_upload(array $file): ?string {
-    if (empty($file['name']) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
-        return null;
-    }
-    if (($file['error'] ?? 0) !== UPLOAD_ERR_OK) {
-        throw new RuntimeException('Upload failed (error code ' . $file['error'] . ').');
-    }
-    $max = 4 * 1024 * 1024; // 4 MB
-    if ($file['size'] > $max) {
-        throw new RuntimeException('File is too large (max 4 MB).');
-    }
-
-    // Validate file extension
-    $fileName = $file['name'];
-    $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-    $allowedExt = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
-    
-    if (!in_array($fileExt, $allowedExt)) {
-        throw new RuntimeException('Only JPG, PNG, WEBP, and GIF images are allowed.');
-    }
-
-    // Validate real MIME type
-    $finfo = new finfo(FILEINFO_MIME_TYPE);
-    $mime  = $finfo->file($file['tmp_name']);
-    $allowedMimes = ['image/jpeg' => 'jpg', 'image/jpg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
-    
-    if (!isset($allowedMimes[$mime])) {
-        throw new RuntimeException('Invalid file type detected.');
-    }
-
-    // Verify extension matches MIME type
-    $detectedExt = $allowedMimes[$mime];
-    if ($detectedExt !== $fileExt && !($detectedExt === 'jpg' && $fileExt === 'jpeg')) {
-        throw new RuntimeException('File extension does not match its content.');
-    }
-
-    // Generate secure filename
-    $name = bin2hex(random_bytes(12)) . '.' . $detectedExt;
-    $dest = UPLOAD_DIR . $name;
-
-    // Ensure upload directory exists and is writable
-    if (!is_dir(UPLOAD_DIR)) {
-        @mkdir(UPLOAD_DIR, 0755, true);
-    }
-
-    // Add .htaccess protection if not exists
-    $htaccess = UPLOAD_DIR . '.htaccess';
-    if (!is_file($htaccess)) {
-        file_put_contents($htaccess, 
-            "Order deny,allow\nDeny from all\n<FilesMatch '\.(jpg|jpeg|png|webp|gif)$'>\nAllow from all\n</FilesMatch>"
+        $stmt = $pdo->prepare(
+            "INSERT INTO activity_logs (user_id, action, target_type, target_id, details, ip_address, created_at)
+             VALUES (:user_id, :action, :target_type, :target_id, :details, :ip, NOW())"
         );
+        return $stmt->execute([
+            ':user_id'     => $userId,
+            ':action'      => $action,
+            ':target_type' => $targetType,
+            ':target_id'   => $targetId,
+            ':details'     => $details,
+            ':ip'          => $ip,
+        ]);
+    } catch (Exception $e) {
+        error_log("Failed to log activity: " . $e->getMessage());
+        return false;
     }
+}
 
-    if (!move_uploaded_file($file['tmp_name'], $dest)) {
-        throw new RuntimeException('Could not save the uploaded file.');
+/**
+ * Retrieve a system setting from system_settings table.
+ */
+function get_setting(string $key, string $default = ''): string {
+    try {
+        $pdo = get_db_connection();
+        $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = :k LIMIT 1");
+        $stmt->execute([':k' => $key]);
+        $val = $stmt->fetchColumn();
+        return $val !== false ? $val : $default;
+    } catch (Exception $e) {
+        return $default;
+    }
+}
+
+/**
+ * Retrieve base application URL dynamically.
+ */
+function base_url(string $path = ''): string {
+    $scriptDir = dirname($_SERVER['SCRIPT_NAME'] ?? '');
+    // Normalize path separators on Windows (XAMPP)
+    $scriptDir = str_replace('\\', '/', $scriptDir);
+    
+    $subfolders = ['lost_items', 'found_items', 'matches', 'admin', 'profile', 'setup', 'notifications'];
+    $root = rtrim($scriptDir, '/');
+    if (preg_match('#/(' . implode('|', $subfolders) . ')$#', $root)) {
+        $root = preg_replace('#/(' . implode('|', $subfolders) . ')$#', '', $root);
     }
     
-    // Set proper permissions
-    @chmod($dest, 0644);
-    
-    return $name; // stored as just the filename inside uploads/
+    $cleanPath = ltrim($path, '/');
+    return rtrim($root, '/') . ($cleanPath ? '/' . $cleanPath : '');
 }
 
 /**
- * Delete an uploaded image.
+ * Upload an image file securely to uploads/ directory.
+ *
+ * @param array $file $_FILES['image']
+ * @return string|false Relative file path on success, false on failure
  */
-function delete_upload(?string $filename) {
-    if (!$filename) return;
-    $path = UPLOAD_DIR . $filename;
-    if (is_file($path)) @unlink($path);
+function handle_image_upload(array $file) {
+    if (!isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) {
+        return false;
+    }
+
+    if (empty($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
+        return false;
+    }
+
+    if (!isset($file['size']) || $file['size'] <= 0 || $file['size'] > 5 * 1024 * 1024) {
+        return false;
+    }
+
+    $allowedMimes = [
+        'image/jpeg' => 'jpg',
+        'image/jpg'  => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp',
+    ];
+    $allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+
+    $origExt = strtolower(pathinfo($file['name'] ?? '', PATHINFO_EXTENSION));
+    if (!in_array($origExt, $allowedExts, true)) {
+        return false;
+    }
+
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->file($file['tmp_name']);
+
+    if (!$mime || !array_key_exists($mime, $allowedMimes)) {
+        return false;
+    }
+
+    if (@getimagesize($file['tmp_name']) === false) {
+        return false;
+    }
+
+    $ext = $allowedMimes[$mime];
+    $uploadDir = __DIR__ . '/../uploads/';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+
+    $filename = 'item_' . time() . '_' . bin2hex(random_bytes(6)) . '.' . $ext;
+    $targetPath = $uploadDir . $filename;
+
+    if (move_uploaded_file($file['tmp_name'], $targetPath)) {
+        return 'uploads/' . $filename;
+    }
+
+    return false;
 }
 
 /**
- * Pagination helper. Returns [offset, totalPages, currentPage].
+ * Check whether a stored relative image path exists inside uploads/.
  */
-function paginate(int $total, int $perPage, int $page): array {
-    $perPage = max(1, $perPage);
-    $pages   = max(1, (int)ceil($total / $perPage));
-    $page    = max(1, min($page, $pages));
-    $offset  = ($page - 1) * $perPage;
-    return [$offset, $pages, $page];
+function item_image_exists(?string $relativePath): bool {
+    if (empty($relativePath)) {
+        return false;
+    }
+    $uploadsDir = realpath(__DIR__ . '/../uploads');
+    $targetFile = realpath(__DIR__ . '/../' . ltrim($relativePath, '/'));
+    return (bool)($uploadsDir && $targetFile && strpos($targetFile, $uploadsDir . DIRECTORY_SEPARATOR) === 0 && is_file($targetFile));
 }
 
 /**
- * Build a query string preserving some keys.
+ * Safely delete an uploaded image inside the uploads/ directory.
  */
-function qs(array $overrides = []): string {
-    $qs = array_merge($_GET, $overrides);
-    return http_build_query($qs);
+function delete_uploaded_image(?string $relativePath): void {
+    if (empty($relativePath)) {
+        return;
+    }
+    $uploadsDir = realpath(__DIR__ . '/../uploads');
+    $targetFile = realpath(__DIR__ . '/../' . ltrim($relativePath, '/'));
+    if ($uploadsDir && $targetFile && strpos($targetFile, $uploadsDir . DIRECTORY_SEPARATOR) === 0 && is_file($targetFile)) {
+        @unlink($targetFile);
+    }
 }

@@ -1,113 +1,142 @@
-# Lost & Found Management System
+# FoundU - Lost & Found Management System
 
-A premium, secure, PHP + MySQL Lost & Found Management System built for XAMPP. Designed for a System Administration & Maintenance capstone project.
+A web-based Lost & Found Management System built with **PHP 8+**, **MySQL (PDO)**, **HTML5**, **CSS3**, **Vanilla JavaScript**, and **Bootstrap 5**. Designed specifically for campus and institution administration to catalog lost belongings, register found items in custody, match records, and track items until return.
 
-## 🚀 Quick Setup (XAMPP)
+---
 
-1. Install **XAMPP** and start **Apache** + **MySQL**.
-2. Copy this project folder to:
-3. Open **phpMyAdmin** → `http://localhost/phpmyadmin`
-4. Click **Import** → choose `database/lost_and_found_db.sql` → **Go**.
-5. Place your logo at:
-   (Square image, any size — it will be preserved.)
-6. Visit: `http://localhost/lost_and_found/`
+## 🛠️ Technology Stack
 
-## 👤 Create First Administrator
+- **Backend**: PHP 8.0+ with PHP PDO (`mysql:host=localhost`)
+- **Database**: MySQL 5.7+ / 8.0+ or MariaDB (InnoDB engine, utf8mb4)
+- **Frontend**: HTML5, CSS3, Vanilla JavaScript (ES6+), Bootstrap 5.3, Font Awesome 6
+- **Architecture**: Modular PHP (reusable headers, footers, sidebars, CSRF tokens, flash sessions)
+- **Web Server**: Apache / XAMPP / LAMP / WAMP
 
-1. Visit: `http://localhost/lost_and_found/setup/create_admin.php`
-2. Default credentials:
-   - Username: `admin`
-   - Password: `Admin123!`
-3. **⚠️ Change the password immediately after first login.**
-4. **DELETE `setup/create_admin.php`** after creating the admin account.
+---
 
-## 👥 Create Staff Accounts
+## 🚀 XAMPP Installation & Setup Guide
 
-1. Log in as Administrator.
-2. Go to **Administration → Manage Users**.
-3. Fill out the "Create New Staff Account" form.
+### 1. Place the Project in XAMPP
+Copy or move the project folder into your XAMPP web root:
+- **Windows**: `C:\xampp\htdocs\foundu`
+- **macOS**: `/Applications/XAMPP/htdocs/foundu`
+- **Linux**: `/opt/lampp/htdocs/foundu`
 
-## 🔐 Security Features
+### 2. Start Services
+Open the **XAMPP Control Panel** and click **Start** for both:
+1. **Apache**
+2. **MySQL**
 
-- Password hashing via `password_hash()` / `password_verify()`
-- Prepared statements (no SQL injection)
-- CSRF tokens on every state-changing form
-- Role-based authorization (admin / staff)
-- Server-side validation on every input
-- Safe image upload (MIME validation, random filenames, stored outside web execution)
-- Session regeneration on login
-- Backups stored outside web-accessible directory
+### 3. Import Database
+1. Open your web browser and go to: [http://localhost/phpmyadmin](http://localhost/phpmyadmin)
+2. Click **New** in the left sidebar and create a database named:
+   ```sql
+   lost_and_found_db1
+   ```
+   (Collation: `utf8mb4_unicode_ci`)
+3. Click on `lost_and_found_db1`, then click on the **Import** tab at the top.
+4. Click **Choose File** and select:
+   ```
+   database/lost_and_found_db.sql
+   ```
+5. Click **Import** at the bottom of the page.
 
-## 💾 Backup & Recovery
+### 4. Database Configuration (Optional)
+If your MySQL has a password or custom port, edit `config/database.php`:
+```php
+define('DB_HOST', 'localhost');
+define('DB_PORT', '3306');
+define('DB_NAME', 'lost_and_found_db1');
+define('DB_USER', 'root');
+define('DB_PASS', ''); // default in XAMPP is empty
+```
 
-- **Automatic**: Admin → Backup & Recovery → "Create Backup Now"
-- **Manual**: phpMyAdmin → Export → `lost_and_found_db` → SQL
-- **Restore**: Upload the `.sql` file through phpMyAdmin → Import
+### 5. Open Application
+Navigate to your local project URL in your browser:
+```
+http://localhost/foundu/
+```
 
-## 🧪 Testing
+---
 
-### As Admin
-- Create staff accounts
-- Report lost items, add found items
-- Confirm matches between lost/found records
-- Update statuses (Open → Matched → Returned → Closed)
-- View Activity Log, System Monitor, Settings
+## 🔑 Default Credentials
 
-### As Staff
-- Report lost items, add found items
-- View and edit their own records
-- Cannot access admin-only pages (returns 403)
+| Role | Username | Password | Privileges |
+| :--- | :--- | :--- | :--- |
+| **Administrator** | `admin` | `admin123` | Full access (Users, Audit Logs, Settings, Backup, Items) |
+| **Staff Operator** | `staff` | `staff123` | Log lost/found items, manage matches, view inventory |
+
+*(You can change your password anytime under **My Profile** or seed a new admin at `setup/create_admin.php`)*
+
+---
 
 ## 📁 Project Structure
-lost_and_found/
-├── index.php # Landing page
-├── login.php # Sign in
-├── logout.php # Sign out
-├── dashboard.php # Admin home
-├── config/database.php # DB connection
-├── includes/ # Reusable components
-├── admin/ # Admin-only pages
-├── lost_items/ # Lost items module
-├── found_items/ # Found items module
-├── profile/ # User profile
-├── assets/ # CSS, JS, images
-├── picture/logo.jpg # Your logo (place here)
-├── uploads/ # Uploaded images
-├── storage/backups/ # DB backups (protected)
-├── database/ # SQL import file
-└── setup/ # One-time admin setup
 
-## 🎨 Design
+```
+foundu/
+├── config/
+│   └── database.php             # PDO database connection & error diagnostics
+├── database/
+│   └── lost_and_found_db.sql    # Complete SQL schema & initial seed data
+├── includes/
+│   ├── auth.php                 # PHP session authentication & role checks
+│   ├── csrf.php                 # Cryptographic CSRF token generation & validation
+│   ├── flash_messages.php       # Flash notification alerts
+│   ├── functions.php            # Sanitization, activity logging, image upload
+│   ├── header.php               # HTML5 head, Bootstrap 5 CDN, CSS imports
+│   ├── navbar.php               # Top navigation bar & user menu
+│   ├── sidebar.php              # Responsive sidebar navigation
+│   └── footer.php               # Footer, Bootstrap JS bundle & vanilla JS
+├── lost_items/
+│   ├── index.php                # Directory with search, category & status filters
+│   ├── report.php               # Report lost item form with image upload
+│   ├── view.php                 # View lost item details & match suggestions
+│   ├── edit.php                 # Edit lost item details & status
+│   └── process.php              # CRUD backend processor (PDO prepared statements)
+├── found_items/
+│   ├── index.php                # Inventory list with storage locker filters
+│   ├── add.php                  # Record found item form with storage location
+│   ├── view.php                 # View found item details & storage info
+│   ├── edit.php                 # Edit storage locker and custody notes
+│   └── process.php              # Found item CRUD backend processor
+├── matches/
+│   ├── index.php                # Manage linked matches & claim handovers
+│   └── process.php              # Link lost item <-> found item, return release
+├── admin/
+│   ├── manage_users.php         # Manage operator accounts (admin/staff)
+│   ├── activity_log.php         # Immutable audit trail of system activities
+│   ├── backup_recovery.php      # Live SQL dump export & backup logs
+│   ├── system_monitor.php       # Server diagnostics (PHP, MySQL, disk, uploads)
+│   └── settings.php             # Global configuration (system name, pagination)
+├── profile/
+│   └── index.php                # Operator profile management & password change
+├── setup/
+│   └── create_admin.php         # Standalone administrator seeding utility
+├── assets/
+│   ├── css/
+│   │   ├── style.css            # Custom CSS3 enhancements
+│   │   ├── auth.css             # Login page styling
+│   │   ├── dashboard.css        # KPI cards & analytics
+│   │   ├── forms.css            # Form validation styles
+│   │   └── responsive.css       # Mobile & tablet layout adjustments
+│   └── js/
+│       └── main.js              # Vanilla JavaScript (validation, shortcuts)
+├── uploads/
+│   └── .htaccess                # Security policy preventing script execution
+├── .htaccess                    # Apache web server configuration
+├── index.php                    # Root entry point router
+├── login.php                    # Secure authentication login portal
+├── logout.php                   # Session teardown handler
+└── dashboard.php                # Main dashboard with real-time KPI metrics
+```
 
-- **Palette**: White, cool gray, deep navy, restrained electric-blue accent
-- **Typography**: Poppins (body), Outfit (display headings)
-- **Liquid glass**: Used only on the top navigation bar
-- **Logo**: Square, never cropped to circle, `object-fit: contain`
+---
 
-## 🛠 Troubleshooting
+## 🔒 Security Features Implemented
 
-| Issue | Solution |
-|-------|----------|
-| Apache won't start | Another app uses port 80. Change Apache port in `httpd.conf` or stop Skype/IIS. Update `BASE_URL` in `config/database.php` if using a custom port. |
-| MySQL won't start | Port 3306 conflict, or data folder corrupted. Check XAMPP Control Panel logs. |
-| "Database connection failed" | Verify MySQL is running. Check `DB_USER`/`DB_PASS` in `config/database.php`. |
-| Login fails | Ensure admin was created via `setup/create_admin.php`. Check `users` table in phpMyAdmin. |
-| Images won't upload | Ensure `uploads/` folder is writable (right-click → Properties → Security). |
-| Backup fails | Ensure `storage/backups/` is writable. `mysqldump` must be in system PATH (included in XAMPP). |
-
-## 🗓 Maintenance Schedule
-
-- **Daily**: Review activity log, verify backups
-- **Weekly**: Check disk space, review error logs
-- **Monthly**: Review user accounts, update XAMPP, test backup restoration
-- **As needed**: Create staff accounts, adjust settings, restore from backup
-
-## 📝 Administration Log Template
-
-| Date | Activity | Action Taken | Result |
-|------|----------|--------------|--------|
-| YYYY-MM-DD | _e.g., User account review_ | _e.g., Deactivated 2 inactive staff_ | _Success_ |
-
-## 📄 License
-
-Built for educational / capstone purposes.
+- **Prepared Statements (PDO)**: Complete protection against SQL injection attacks across all endpoints.
+- **CSRF Protection**: All POST operations require valid cryptographic tokens verified via `hash_equals()`.
+- **Session Security**: Session regeneration on authentication to prevent session fixation.
+- **Password Hashing**: `password_hash()` with `PASSWORD_DEFAULT` (Bcrypt) and `password_verify()`.
+- **XSS Mitigation**: Strict sanitization and `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all dynamic outputs.
+- **Upload Directory Hardening**: `.htaccess` denies execution of `.php`, `.cgi`, `.sh` files inside `uploads/`.

@@ -1,162 +1,246 @@
 <?php
-require_once dirname(__DIR__) . '/config/database.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/functions.php';
-require_once dirname(__DIR__) . '/includes/header.php';
-require_once dirname(__DIR__) . '/includes/navbar.php';
-require_once dirname(__DIR__) . '/includes/sidebar.php';
+/**
+ * Lost Items Directory (Browse & Search)
+ * FoundU - Lost & Found Management System
+ */
 
+require_once __DIR__ . '/../includes/auth.php';
 require_login();
 
-// Filters
-$q        = trim($_GET['q'] ?? '');
-$category = (int)($_GET['category'] ?? 0);
-$status   = trim($_GET['status'] ?? '');
-$from     = trim($_GET['from'] ?? '');
-$to       = trim($_GET['to'] ?? '');
-$page     = max(1, (int)($_GET['page'] ?? 1));
-$perPage  = 15;
+$pdo = get_db_connection();
 
+// Filters & Search
+$search = trim($_GET['search'] ?? '');
+$categoryId = trim($_GET['category'] ?? '');
+$status = trim($_GET['status'] ?? '');
+$page = max(1, (int)($_GET['page'] ?? 1));
+$perPage = max(1, (int)get_setting('items_per_page', '12'));
+
+// Fetch all categories for filter dropdown
+$categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAll();
+
+// Build query
 $where = [];
 $params = [];
 
-if ($q !== '') {
-    $where[] = "(l.item_name LIKE CONCAT('%', ?, '%') OR l.description LIKE CONCAT('%', ?, '%') OR l.location_lost LIKE CONCAT('%', ?, '%'))";
-    $params[] = $q; $params[] = $q; $params[] = $q;
+if (!empty($search)) {
+    $where[] = "(l.item_name LIKE :s OR l.description LIKE :s OR l.location_lost LIKE :s OR l.contact_info LIKE :s)";
+    $params[':s'] = "%$search%";
 }
-if ($category > 0) { $where[] = "l.category_id = ?"; $params[] = $category; }
-if ($status !== '') { $where[] = "l.status = ?"; $params[] = $status; }
-if ($from !== '') { $where[] = "l.date_lost >= ?"; $params[] = $from; }
-if ($to !== '')   { $where[] = "l.date_lost <= ?"; $params[] = $to; }
 
-$sql = "SELECT l.*, c.name AS category_name, u.full_name AS reporter 
-        FROM lost_items l 
-        LEFT JOIN categories c ON c.id = l.category_id 
-        LEFT JOIN users u ON u.id = l.reported_by";
-if ($where) $sql .= " WHERE " . implode(' AND ', $where);
-$sql .= " ORDER BY l.created_at DESC";
+if (!empty($categoryId) && is_numeric($categoryId)) {
+    $where[] = "l.category_id = :cat";
+    $params[':cat'] = $categoryId;
+}
 
-// Count
-$countSql = "SELECT COUNT(*) FROM lost_items l" . ($where ? " WHERE " . implode(' AND ', $where) : "");
-$total = $pdo->prepare($countSql);
-$total->execute($params);
-$total = (int)$total->fetchColumn();
+if (!empty($status) && in_array($status, ['open', 'matched', 'returned', 'closed'])) {
+    $where[] = "l.status = :st";
+    $params[':st'] = $status;
+}
 
-[$offset, $pages, $page] = paginate($total, $perPage, $page);
-$sql .= " LIMIT $perPage OFFSET $offset";
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$rows = $stmt->fetchAll();
+$whereClause = !empty($where) ? 'WHERE ' . implode(' AND ', $where) : '';
 
-$categories = get_categories($pdo);
+// Count total
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM lost_items l $whereClause");
+$countStmt->execute($params);
+$totalItems = (int)$countStmt->fetchColumn();
+$totalPages = max(1, (int)ceil($totalItems / $perPage));
+if ($page > $totalPages) {
+    $page = $totalPages;
+}
+$offset = ($page - 1) * $perPage;
 
-$pageTitle = 'Lost Items';
-$activePage = 'lost';
+// Fetch items
+$query = "SELECT l.*, c.name AS category_name, u.full_name AS reporter_name
+          FROM lost_items l
+          LEFT JOIN categories c ON l.category_id = c.id
+          LEFT JOIN users u ON l.reported_by = u.id
+          $whereClause
+          ORDER BY l.created_at DESC
+          LIMIT :limit OFFSET :offset";
+
+$stmt = $pdo->prepare($query);
+foreach ($params as $k => $v) {
+    $stmt->bindValue($k, $v);
+}
+$stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
+$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+$stmt->execute();
+$items = $stmt->fetchAll();
+
+$pageTitle = 'Lost Items Directory';
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
 ?>
-<main class="main-content">
-    <div class="page-header">
-        <div>
-            <h1 class="page-title">Lost Items</h1>
-            <p class="page-subtitle"><?= number_format($total) ?> record<?= $total === 1 ? '' : 's' ?> found.</p>
+
+<div class="d-flex flex-grow-1">
+    <?php require_once __DIR__ . '/../includes/sidebar.php'; ?>
+
+    <main class="main-content flex-grow-1 p-3 p-md-4 p-xl-5">
+        <div class="container-fluid">
+            <!-- Header bar -->
+            <div class="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-3 mb-4">
+                <div>
+                    <h1 class="h3 fw-semibold mb-1">Lost Items Directory</h1>
+                    <p class="font-meta text-muted small mb-0">Browse and manage items reported lost across campus by students and faculty.</p>
+                </div>
+                <a href="<?= base_url('lost_items/report.php') ?>" class="btn btn-primary px-3 py-2">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Report Lost Item</span>
+                </a>
+            </div>
+
+            <?= render_flash() ?>
+
+            <!-- Filter Card -->
+            <div class="card mb-4">
+                <div class="card-body p-3 p-md-4">
+                    <form method="GET" action="<?= base_url('lost_items/index.php') ?>" class="row g-2 g-md-3 align-items-center">
+                        <div class="col-12 col-md-5">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light border-end-0 text-muted"><i class="fa-solid fa-magnifying-glass"></i></span>
+                                <input type="text" name="search" class="form-control bg-light border-start-0" placeholder="Search item name, location, contact..." value="<?= sanitize($search) ?>">
+                            </div>
+                        </div>
+
+                        <div class="col-6 col-md-3">
+                            <select name="category" class="form-select bg-light">
+                                <option value="">All Categories</option>
+                                <?php foreach ($categories as $cat): ?>
+                                    <option value="<?= $cat['id'] ?>" <?= ($categoryId == $cat['id']) ? 'selected' : '' ?>>
+                                        <?= sanitize($cat['name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-6 col-md-2">
+                            <select name="status" class="form-select bg-light">
+                                <option value="">All Statuses</option>
+                                <option value="open" <?= ($status === 'open') ? 'selected' : '' ?>>Open</option>
+                                <option value="matched" <?= ($status === 'matched') ? 'selected' : '' ?>>Matched</option>
+                                <option value="returned" <?= ($status === 'returned') ? 'selected' : '' ?>>Returned</option>
+                                <option value="closed" <?= ($status === 'closed') ? 'selected' : '' ?>>Closed</option>
+                            </select>
+                        </div>
+
+                        <div class="col-12 col-md-2 d-flex gap-2">
+                            <button type="submit" class="btn btn-primary flex-grow-1">
+                                <i class="fa-solid fa-magnifying-glass"></i>
+                                <span>Filter</span>
+                            </button>
+                            <a href="<?= base_url('lost_items/index.php') ?>" class="btn btn-secondary" title="Reset Filters">
+                                <i class="fa-solid fa-rotate-left"></i>
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Items Table -->
+            <div class="card overflow-hidden">
+                <div class="card-body p-0">
+                    <?php if (empty($items)): ?>
+                        <div class="text-center py-5">
+                            <i class="fa-solid fa-magnifying-glass fs-1 text-muted"></i>
+                            <h5 class="font-display fw-semibold text-dark mt-3">No lost items found</h5>
+                            <p class="font-meta text-muted small mb-0">Try modifying your search criteria or report a new lost item.</p>
+                        </div>
+                    <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th class="ps-4">Item Details</th>
+                                        <th>Category</th>
+                                        <th>Location Lost</th>
+                                        <th>Date Lost</th>
+                                        <th>Contact</th>
+                                        <th>Status</th>
+                                        <th class="text-end pe-4">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($items as $item): ?>
+                                        <tr>
+                                            <td class="ps-4">
+                                                <div class="d-flex align-items-center gap-3">
+                                                    <?php if (!empty($item['image_path']) && item_image_exists($item['image_path'])): ?>
+                                                        <img src="<?= base_url($item['image_path']) ?>" alt="<?= sanitize($item['item_name']) ?>" class="item-thumb" data-fallback-kind="thumb" data-fallback-icon="fa-regular fa-image">
+                                                    <?php else: ?>
+                                                        <div class="item-thumb-placeholder">
+                                                            <i class="fa-regular fa-image"></i>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <div>
+                                                        <a href="<?= base_url('lost_items/view.php?id=' . $item['id']) ?>" class="fw-semibold text-dark text-decoration-none">
+                                                            <?= sanitize($item['item_name']) ?>
+                                                        </a>
+                                                        <p class="font-meta text-muted small text-truncate mb-0" style="max-width: 240px;">
+                                                            <?= sanitize($item['description']) ?>
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="category-badge"><?= sanitize($item['category_name'] ?? 'General') ?></span></td>
+                                            <td class="small font-meta text-muted"><i class="fa-solid fa-location-dot me-1 text-secondary"></i><?= sanitize($item['location_lost']) ?></td>
+                                            <td class="small font-meta text-muted text-nowrap"><?= format_date($item['date_lost']) ?></td>
+                                            <td class="small font-meta text-muted"><?= sanitize($item['contact_info']) ?></td>
+                                            <td>
+                                                <span class="badge status-badge-<?= sanitize($item['status']) ?>">
+                                                    <?= strtoupper(sanitize($item['status'])) ?>
+                                                </span>
+                                            </td>
+                                            <td class="text-end pe-4">
+                                                <div class="d-inline-flex align-items-center gap-1">
+                                                    <a href="<?= base_url('lost_items/view.php?id=' . $item['id']) ?>" class="btn btn-view btn-action-icon" title="View details">
+                                                        <i class="fa-solid fa-eye"></i>
+                                                    </a>
+                                                    <a href="<?= base_url('lost_items/edit.php?id=' . $item['id']) ?>" class="btn btn-outline-primary btn-action-icon" title="Edit item">
+                                                        <i class="fa-solid fa-pen-to-square"></i>
+                                                    </a>
+                                                    <form method="POST" action="<?= base_url('lost_items/process.php') ?>" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this lost item record?');">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="action" value="delete">
+                                                        <input type="hidden" name="id" value="<?= $item['id'] ?>">
+                                                        <button type="submit" class="btn btn-danger btn-action-icon" title="Delete record">
+                                                            <i class="fa-solid fa-trash"></i>
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Pagination -->
+                        <?php if ($totalPages > 1): ?>
+                            <div class="card-footer py-3 px-4 d-flex align-items-center justify-content-between">
+                                <span class="small font-meta text-muted">Showing page <?= $page ?> of <?= $totalPages ?> (Total: <?= $totalItems ?> items)</span>
+                                <nav aria-label="Page navigation">
+                                    <ul class="pagination pagination-sm mb-0">
+                                        <li class="page-item <?= ($page <= 1) ? 'disabled' : '' ?>">
+                                            <a class="page-link" href="<?= base_url('lost_items/index.php?page=' . ($page - 1) . '&search=' . urlencode($search) . '&category=' . urlencode($categoryId) . '&status=' . urlencode($status)) ?>">Previous</a>
+                                        </li>
+                                        <?php for ($p = 1; $p <= $totalPages; $p++): ?>
+                                            <li class="page-item <?= ($p === $page) ? 'active' : '' ?>">
+                                                <a class="page-link" href="<?= base_url('lost_items/index.php?page=' . $p . '&search=' . urlencode($search) . '&category=' . urlencode($categoryId) . '&status=' . urlencode($status)) ?>"><?= $p ?></a>
+                                            </li>
+                                        <?php endfor; ?>
+                                        <li class="page-item <?= ($page >= $totalPages) ? 'disabled' : '' ?>">
+                                            <a class="page-link" href="<?= base_url('lost_items/index.php?page=' . ($page + 1) . '&search=' . urlencode($search) . '&category=' . urlencode($categoryId) . '&status=' . urlencode($status)) ?>">Next</a>
+                                        </li>
+                                    </ul>
+                                </nav>
+                            </div>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
         </div>
-        <div class="page-actions">
-            <a href="<?= BASE_URL ?>/lost_items/report.php" class="btn btn-primary">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Report Lost Item
-            </a>
-        </div>
-    </div>
+    </main>
+</div>
 
-    <?php flash_render(); ?>
-
-    <div class="card filter-card">
-        <form method="get" class="filter-form">
-            <div class="filter-row">
-                <div class="form-group">
-                    <label>Search</label>
-                    <input type="text" name="q" value="<?= e($q) ?>" placeholder="Item name, description, location...">
-                </div>
-                <div class="form-group">
-                    <label>Category</label>
-                    <select name="category">
-                        <option value="">All categories</option>
-                        <?php foreach ($categories as $c): ?>
-                            <option value="<?= (int)$c['id'] ?>" <?= $category === (int)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Status</label>
-                    <select name="status">
-                        <option value="">All statuses</option>
-                        <option value="open"     <?= $status === 'open' ? 'selected' : '' ?>>Open</option>
-                        <option value="matched"  <?= $status === 'matched' ? 'selected' : '' ?>>Matched</option>
-                        <option value="returned" <?= $status === 'returned' ? 'selected' : '' ?>>Returned</option>
-                        <option value="closed"   <?= $status === 'closed' ? 'selected' : '' ?>>Closed</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>From</label>
-                    <input type="date" name="from" value="<?= e($from) ?>">
-                </div>
-                <div class="form-group">
-                    <label>To</label>
-                    <input type="date" name="to" value="<?= e($to) ?>">
-                </div>
-            </div>
-            <div class="filter-actions">
-                <button type="submit" class="btn btn-primary">Apply Filters</button>
-                <a href="<?= BASE_URL ?>/lost_items/" class="btn btn-ghost">Clear</a>
-            </div>
-        </form>
-    </div>
-
-    <div class="card">
-        <?php if (!$rows): ?>
-            <div class="empty-state">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <h3>No lost items found</h3>
-                <p>Try adjusting your filters or report a new lost item.</p>
-            </div>
-        <?php else: ?>
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Item</th>
-                            <th>Category</th>
-                            <th>Date Lost</th>
-                            <th>Location</th>
-                            <th>Reported By</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php foreach ($rows as $r): ?>
-                        <tr>
-                            <td><strong><?= e($r['item_name']) ?></strong></td>
-                            <td><?= e($r['category_name'] ?? '—') ?></td>
-                            <td><?= format_date($r['date_lost']) ?></td>
-                            <td><?= e($r['location_lost'] ?: '—') ?></td>
-                            <td><?= e($r['reporter'] ?? '—') ?></td>
-                            <td><?= status_badge($r['status']) ?></td>
-                            <td class="text-right">
-                                <a href="<?= BASE_URL ?>/lost_items/view.php?id=<?= (int)$r['id'] ?>" class="link-btn">View</a>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-            <?php if ($pages > 1): ?>
-                <div class="pagination">
-                    <?php for ($i = 1; $i <= $pages; $i++): ?>
-                        <a href="?<?= qs(['page' => $i]) ?>" class="page-link <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
-                    <?php endfor; ?>
-                </div>
-            <?php endif; ?>
-        <?php endif; ?>
-    </div>
-</main>
-<?php require_once dirname(__DIR__) . '/includes/footer.php'; ?>
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

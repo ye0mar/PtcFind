@@ -1,2 +1,0 @@
-# Deny all web access to storage directory
-Deny from all

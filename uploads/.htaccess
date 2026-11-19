@@ -1,12 +1,6 @@
-# Prevent PHP execution in uploads directory
-<FilesMatch "\.(php|php3|php4|php5|phtml|pl|py|jsp|asp|sh|cgi)$">
+# Prevent script execution in uploads directory
+<FilesMatch "\.(php|phtml|php3|php4|php5|php7|phps|sh|pl|cgi)$">
+    Order Deny,Allow
     Deny from all
 </FilesMatch>
-
-# Only allow image files
-<FilesMatch "\.(jpg|jpeg|png|gif|webp)$">
-    Allow from all
-</FilesMatch>
-
-# Disable directory listing
-Options -Indexes
+Options -Indexes -ExecCGI

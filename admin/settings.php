@@ -1,68 +1,98 @@
 <?php
-require_once dirname(__DIR__) . '/config/database.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/csrf.php';
-require_once dirname(__DIR__) . '/includes/functions.php';
-require_once dirname(__DIR__) . '/includes/header.php';
-require_once dirname(__DIR__) . '/includes/navbar.php';
-require_once dirname(__DIR__) . '/includes/sidebar.php';
+/**
+ * System Settings Configuration
+ * FoundU - Lost & Found Management System
+ */
 
-require_role('admin');
+require_once __DIR__ . '/../includes/auth.php';
+require_admin();
+require_once __DIR__ . '/../includes/csrf.php';
 
-$keys = ['system_name','organization_name','default_status_lost','default_status_found','items_per_page'];
-$settings = [];
-foreach ($keys as $k) {
-    $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
-    $s->execute([$k]);
-    $settings[$k] = $s->fetchColumn() ?: '';
-}
+$pdo = get_db_connection();
 
+// Handle settings update
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    csrf_require($_POST['_csrf'] ?? null);
-    foreach ($keys as $k) {
-        $val = trim($_POST[$k] ?? '');
-        $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")
-            ->execute([$k, $val]);
-        $settings[$k] = $val;
+    check_csrf();
+
+    $systemName = trim($_POST['system_name'] ?? '');
+    $orgName    = trim($_POST['organization_name'] ?? '');
+    $perPage    = max(5, min(100, (int)($_POST['items_per_page'] ?? 15)));
+
+    if (!empty($systemName) && !empty($orgName)) {
+        try {
+            $stmt = $pdo->prepare("REPLACE INTO system_settings (setting_key, setting_value) VALUES (:k, :v)");
+
+            $stmt->execute([':k' => 'system_name', ':v' => $systemName]);
+            $stmt->execute([':k' => 'organization_name', ':v' => $orgName]);
+            $stmt->execute([':k' => 'items_per_page', ':v' => (string)$perPage]);
+
+            log_activity('UPDATE_SETTINGS', 'system_settings', null, "Updated system settings (Name: {$systemName})");
+            set_flash('success', 'System settings updated successfully.');
+        } catch (Exception $e) {
+            set_flash('error', 'Failed to update settings: ' . $e->getMessage());
+        }
+    } else {
+        set_flash('error', 'Please fill in all required settings fields.');
     }
-    log_activity($pdo, current_user_id(), 'settings_updated', 'settings', null, 'Updated system settings');
-    flash_success('Settings saved.');
-    header('Location: ' . BASE_URL . '/admin/settings.php'); exit;
+
+    header('Location: ' . base_url('admin/settings.php'));
+    exit;
 }
 
-$pageTitle = 'Settings';
-$activePage = 'settings';
-?>
-<main class="main-content">
-    <div class="page-header"><div><h1 class="page-title">Settings</h1><p class="page-subtitle">Configure general system options.</p></div></div>
-    <?php flash_render(); ?>
+$systemName = get_setting('system_name', 'FoundU - Lost & Found Management System');
+$orgName    = get_setting('organization_name', 'Polytechnic Campus Administration');
+$perPage    = get_setting('items_per_page', '15');
 
-    <form method="post" class="form-card card">
-        <?= csrf_field() ?>
-        <div class="card-body">
-            <div class="form-grid two-col">
-                <div class="form-group"><label>System Name</label><input type="text" name="system_name" value="<?= e($settings['system_name']) ?>"></div>
-                <div class="form-group"><label>Organization Name</label><input type="text" name="organization_name" value="<?= e($settings['organization_name']) ?>"></div>
-                <div class="form-group">
-                    <label>Default Lost Status</label>
-                    <select name="default_status_lost">
-                        <?php foreach (['open','matched','returned','closed'] as $s): ?>
-                            <option value="<?= $s ?>" <?= $settings['default_status_lost'] === $s ? 'selected' : '' ?>><?= ucfirst($s) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Default Found Status</label>
-                    <select name="default_status_found">
-                        <?php foreach (['available','matched','returned','closed'] as $s): ?>
-                            <option value="<?= $s ?>" <?= $settings['default_status_found'] === $s ? 'selected' : '' ?>><?= ucfirst($s) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="form-group"><label>Items per Page</label><input type="number" name="items_per_page" value="<?= e($settings['items_per_page']) ?>" min="5" max="100"></div>
+$pageTitle = 'System Settings';
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="d-flex flex-grow-1">
+    <?php require_once __DIR__ . '/../includes/sidebar.php'; ?>
+
+    <main class="main-content flex-grow-1 p-3 p-md-4 p-xl-5">
+        <div class="container-fluid" style="max-width: 800px;">
+            <div class="mb-4">
+                <h1 class="h3 fw-semibold mb-1">System Configuration Settings</h1>
+                <p class="font-meta text-muted small mb-0">Manage global portal branding, institution name, and pagination limits.</p>
             </div>
-            <div class="form-actions"><button type="submit" class="btn btn-primary">Save Settings</button></div>
+
+            <?= render_flash() ?>
+
+            <div class="card">
+                <div class="card-body p-4 p-md-5">
+                    <form method="POST" action="<?= base_url('admin/settings.php') ?>" class="needs-validation" novalidate>
+                        <?= csrf_field() ?>
+
+                        <div class="mb-4">
+                            <label for="systemName" class="form-label small">Application / System Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="systemName" name="system_name" value="<?= sanitize($systemName) ?>" required>
+                            <div class="form-text small">Displayed in headers, titles, and login portals.</div>
+                        </div>
+
+                        <div class="mb-4">
+                            <label for="organizationName" class="form-label small">Organization / Institution Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="organizationName" name="organization_name" value="<?= sanitize($orgName) ?>" required>
+                            <div class="form-text small">Campus administration department or school name.</div>
+                        </div>
+
+                        <div class="mb-4">
+                            <label for="itemsPerPage" class="form-label small">Items Per Page (Pagination) <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="itemsPerPage" name="items_per_page" value="<?= (int)$perPage ?>" min="5" max="100" required>
+                            <div class="form-text small">Default number of lost and found rows shown on directory tables (5 - 100).</div>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <div class="d-flex justify-content-end">
+                            <button type="submit" class="btn btn-primary px-4">Save Configuration</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
         </div>
-    </form>
-</main>
-<?php require_once dirname(__DIR__) . '/includes/footer.php'; ?>
+    </main>
+</div>
+
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

@@ -1,114 +1,103 @@
 <?php
-require_once dirname(__DIR__) . '/config/database.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/csrf.php';
-require_once dirname(__DIR__) . '/includes/functions.php';
-require_once dirname(__DIR__) . '/includes/header.php';
-require_once dirname(__DIR__) . '/includes/navbar.php';
-require_once dirname(__DIR__) . '/includes/sidebar.php';
+/**
+ * Report Lost Item Form
+ * FoundU - Lost & Found Management System
+ */
 
+require_once __DIR__ . '/../includes/auth.php';
 require_login();
+require_once __DIR__ . '/../includes/csrf.php';
 
-$errors = [];
-$old = [
-    'item_name' => '', 'category_id' => '', 'description' => '',
-    'date_lost' => '', 'location_lost' => '', 'contact_info' => ''
-];
+$pdo = get_db_connection();
+$categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAll();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    csrf_require($_POST['_csrf'] ?? null);
-    $old = array_merge($old, array_map('trim', $_POST));
-
-    if ($old['item_name'] === '') $errors[] = 'Item name is required.';
-    if ($old['date_lost'] === '') $errors[] = 'Date lost is required.';
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $old['date_lost'])) $errors[] = 'Invalid date format.';
-
-    $imagePath = null;
-    if (!empty($_FILES['image']['name'])) {
-        try {
-            $imagePath = handle_upload($_FILES['image']);
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-    }
-
-    if (!$errors) {
-        $stmt = $pdo->prepare("INSERT INTO lost_items (item_name, category_id, description, date_lost, location_lost, contact_info, image_path, reported_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([
-            $old['item_name'],
-            $old['category_id'] ?: null,
-            $old['description'] ?: null,
-            $old['date_lost'],
-            $old['location_lost'] ?: null,
-            $old['contact_info'] ?: null,
-            $imagePath,
-            current_user_id()
-        ]);
-        $id = (int)$pdo->lastInsertId();
-        log_activity($pdo, current_user_id(), 'lost_item_created', 'lost_item', $id, 'Reported: ' . $old['item_name']);
-        flash_success('Lost item reported successfully.');
-        header('Location: ' . BASE_URL . '/lost_items/view.php?id=' . $id);
-        exit;
-    }
-}
-
-$categories = get_categories($pdo);
 $pageTitle = 'Report Lost Item';
-$activePage = 'report-lost';
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
 ?>
-<main class="main-content">
-    <div class="page-header">
-        <div>
-            <h1 class="page-title">Report a Lost Item</h1>
-            <p class="page-subtitle">Provide as much detail as possible to help locate the item.</p>
-        </div>
-    </div>
 
-    <?php if ($errors): ?>
-        <div class="flash flash-error"><span><?= e(implode(' ', $errors)) ?></span></div>
-    <?php endif; ?>
+<div class="d-flex flex-grow-1">
+    <?php require_once __DIR__ . '/../includes/sidebar.php'; ?>
 
-    <form method="post" enctype="multipart/form-data" class="form-card card">
-        <?= csrf_field() ?>
-        <div class="form-grid two-col">
-            <div class="form-group">
-                <label for="item_name">Item Name <span class="req">*</span></label>
-                <input type="text" id="item_name" name="item_name" value="<?= e($old['item_name']) ?>" required maxlength="150">
+    <main class="main-content flex-grow-1 p-3 p-md-4 p-xl-5">
+        <div class="container-fluid" style="max-width: 900px;">
+            <div class="mb-4">
+                <a href="<?= base_url('lost_items/index.php') ?>" class="font-meta text-decoration-none text-muted small d-inline-flex align-items-center gap-2 mb-2">
+                    <i class="fa-solid fa-arrow-left"></i> Back to Lost Items
+                </a>
+                <h1 class="h3 fw-semibold mb-1">Report a Lost Item</h1>
+                <p class="font-meta text-muted small mb-0">Fill in the details below to log a lost item in the FoundU registry.</p>
             </div>
-            <div class="form-group">
-                <label for="category_id">Category</label>
-                <select id="category_id" name="category_id">
-                    <option value="">— Select —</option>
-                    <?php foreach ($categories as $c): ?>
-                        <option value="<?= (int)$c['id'] ?>" <?= (string)$old['category_id'] === (string)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="date_lost">Date Lost <span class="req">*</span></label>
-                <input type="date" id="date_lost" name="date_lost" value="<?= e($old['date_lost']) ?>" required>
-            </div>
-            <div class="form-group">
-                <label for="location_lost">Location Lost</label>
-                <input type="text" id="location_lost" name="location_lost" value="<?= e($old['location_lost']) ?>" maxlength="180" placeholder="e.g. Library, 2nd floor">
-            </div>
-            <div class="form-group full">
-                <label for="description">Description &amp; Identifying Details</label>
-                <textarea id="description" name="description" rows="4" maxlength="2000"><?= e($old['description']) ?></textarea>
-            </div>
-            <div class="form-group">
-                <label for="contact_info">Contact Information</label>
-                <input type="text" id="contact_info" name="contact_info" value="<?= e($old['contact_info']) ?>" maxlength="180" placeholder="Phone or email">
-            </div>
-            <div class="form-group">
-                <label for="image">Image (optional, max 4 MB)</label>
-                <input type="file" id="image" name="image" accept="image/*">
+
+            <?= render_flash() ?>
+
+            <div class="card">
+                <div class="card-body p-4 p-md-5">
+                    <form method="POST" action="<?= base_url('lost_items/process.php') ?>" enctype="multipart/form-data" class="needs-validation" novalidate>
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="action" value="create">
+
+                        <div class="row g-3">
+                            <div class="col-12 col-md-8">
+                                <label for="itemName" class="form-label small">Item Name <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="itemName" name="item_name" placeholder="e.g., iPhone 15 Pro, Calculus Textbook, Hydro Flask" required>
+                                <div class="invalid-feedback">Please provide the item name.</div>
+                            </div>
+
+                            <div class="col-12 col-md-4">
+                                <label for="categoryId" class="form-label small">Category <span class="text-danger">*</span></label>
+                                <select class="form-select" id="categoryId" name="category_id" required>
+                                    <option value="">Select Category...</option>
+                                    <?php foreach ($categories as $cat): ?>
+                                        <option value="<?= $cat['id'] ?>"><?= sanitize($cat['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <div class="invalid-feedback">Please select a category.</div>
+                            </div>
+
+                            <div class="col-12 col-md-6">
+                                <label for="dateLost" class="form-label small">Date Lost <span class="text-danger">*</span></label>
+                                <input type="date" class="form-control" id="dateLost" name="date_lost" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>" required>
+                                <div class="invalid-feedback">Please select the approximate date the item was lost.</div>
+                            </div>
+
+                            <div class="col-12 col-md-6">
+                                <label for="locationLost" class="form-label small">Location Lost <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="locationLost" name="location_lost" placeholder="e.g., Engineering Lab B, 3rd Floor Library" required>
+                                <div class="invalid-feedback">Please describe where the item was misplaced.</div>
+                            </div>
+
+                            <div class="col-12">
+                                <label for="description" class="form-label small">Description &amp; Identifying Details <span class="text-danger">*</span></label>
+                                <textarea class="form-control" id="description" name="description" rows="4" placeholder="Mention brand, color, stickers, unique scratches, serial numbers, case type..." required></textarea>
+                                <div class="invalid-feedback">Please provide identifying details.</div>
+                            </div>
+
+                            <div class="col-12 col-md-6">
+                                <label for="contactInfo" class="form-label small">Owner Contact Info <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="contactInfo" name="contact_info" placeholder="Email address or phone number" required>
+                                <div class="form-text small">Used to notify the owner once a match is found.</div>
+                            </div>
+
+                            <div class="col-12 col-md-6">
+                                <label for="itemImage" class="form-label small">Photo of Item (Optional)</label>
+                                <input type="file" class="form-control" id="itemImage" name="image" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+                                <div class="form-text small">Accepted formats: JPG, JPEG, PNG, WEBP (Max 5MB).</div>
+                                <div class="image-upload-preview-card mt-2 d-none" data-image-preview-box></div>
+                            </div>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <div class="d-flex justify-content-end gap-2">
+                            <a href="<?= base_url('lost_items/index.php') ?>" class="btn btn-secondary px-4">Cancel</a>
+                            <button type="submit" class="btn btn-primary px-4">Submit Report</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
-        <div class="form-actions">
-            <a href="<?= BASE_URL ?>/lost_items/" class="btn btn-ghost">Cancel</a>
-            <button type="submit" class="btn btn-primary">Submit Report</button>
-        </div>
-    </form>
-</main>
-<?php require_once dirname(__DIR__) . '/includes/footer.php'; ?>
+    </main>
+</div>
+
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

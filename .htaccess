@@ -1,0 +1,18 @@
+# FoundU - Apache Configuration for XAMPP
+Options -Indexes +FollowSymLinks
+DirectoryIndex index.php
+
+# Prevent directory listing
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Protect database credentials & sql files
+<FilesMatch "\.(sql|log|ini|env)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# UTF-8 Encoding
+AddDefaultCharset UTF-8

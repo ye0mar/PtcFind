@@ -1,0 +1,8 @@
+{
+  "name": "PtcFind - Lost & Found Management System",
+  "description": "Comprehensive lost and found management system for tracking lost items, found items, matching records, user management, and administrative audit logs.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ],
+  "permissions": []
+}

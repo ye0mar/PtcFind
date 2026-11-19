@@ -1,42 +1,61 @@
 <?php
-// =========================================================
-// DATABASE CONFIGURATION
-// Adjust these values to match your XAMPP/MySQL setup.
-// =========================================================
+/**
+ * Database Configuration & Connection (PHP PDO)
+ * FoundU - Lost & Found Management System
+ * Compatible with XAMPP (Apache + MySQL / MariaDB)
+ */
 
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'lost_and_found_db1');
-define('DB_USER', 'root');
-define('DB_PASS', '');          // Default XAMPP password is empty
-define('DB_CHARSET', 'utf8mb4');
+if (!defined('DB_HOST')) define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+if (!defined('DB_PORT')) define('DB_PORT', getenv('DB_PORT') ?: '3306');
+if (!defined('DB_NAME')) define('DB_NAME', getenv('DB_NAME') ?: 'lost_and_found_db1');
+if (!defined('DB_USER')) define('DB_USER', getenv('DB_USER') ?: 'root');
+if (!defined('DB_PASS')) define('DB_PASS', getenv('DB_PASS') !== false ? getenv('DB_PASS') : '');
+if (!defined('DB_CHARSET')) define('DB_CHARSET', 'utf8mb4');
 
-// Base URL of the application (adjust if you use a non-default port)
-// Example with port 8080: define('BASE_URL', 'http://localhost:8080/lost_and_found');
-define('BASE_URL', 'http://localhost:8080/lost_and_found');
+/**
+ * Returns a singleton PDO database connection instance.
+ *
+ * @return PDO
+ */
+function get_db_connection(): PDO {
+    static $pdo = null;
 
-// Base path on disk
-define('BASE_PATH', dirname(__DIR__));
+    if ($pdo === null) {
+        $dsn = sprintf(
+            'mysql:host=%s;port=%s;dbname=%s;charset=%s',
+            DB_HOST,
+            DB_PORT,
+            DB_NAME,
+            DB_CHARSET
+        );
 
-// Upload directory (must be writable)
-define('UPLOAD_DIR', BASE_PATH . '/uploads/');
-define('UPLOAD_URL', BASE_URL . '/uploads/');
+        $options = [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES   => false,
+            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES " . DB_CHARSET,
+        ];
 
-// Backup storage (NOT web-accessible)
-define('BACKUP_DIR', BASE_PATH . '/storage/backups/');
+        try {
+            $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+        } catch (PDOException $e) {
+            // Friendly error message for XAMPP users if database has not been imported yet
+            die(
+                '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 25px; border: 1px solid #f5c2c7; border-radius: 8px; background: #f8d7da; color: #842029;">' .
+                '<h2 style="margin-top: 0;">Database Connection Error</h2>' .
+                '<p>Could not connect to MySQL database <strong>' . htmlspecialchars(DB_NAME) . '</strong> on <strong>' . htmlspecialchars(DB_HOST) . '</strong>.</p>' .
+                '<p><strong>Troubleshooting for XAMPP:</strong></p>' .
+                '<ol style="line-height: 1.6;">' .
+                '<li>Ensure the <strong>MySQL</strong> module is running in your XAMPP Control Panel.</li>' .
+                '<li>Open <a href="http://localhost/phpmyadmin" target="_blank" style="color: #0d6efd;">phpMyAdmin</a> and create the database named <code>' . htmlspecialchars(DB_NAME) . '</code>.</li>' .
+                '<li>Import the file <code>database/lost_and_found_db.sql</code> into phpMyAdmin.</li>' .
+                '<li>Verify database credentials in <code>config/database.php</code>.</li>' .
+                '</ol>' .
+                '<p><small>Error details: ' . htmlspecialchars($e->getMessage()) . '</small></p>' .
+                '</div>'
+            );
+        }
+    }
 
-// Create directories if missing
-if (!is_dir(UPLOAD_DIR)) @mkdir(UPLOAD_DIR, 0755, true);
-if (!is_dir(BACKUP_DIR)) @mkdir(BACKUP_DIR, 0755, true);
-
-try {
-    $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
-    $pdo = new PDO($dsn, DB_USER, DB_PASS, [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-    ]);
-} catch (PDOException $e) {
-    // Generic error — never expose credentials
-    http_response_code(500);
-    die('Database connection failed. Please check your configuration.');
+    return $pdo;
 }
