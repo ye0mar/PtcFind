@@ -51,7 +51,7 @@ try {
 }
 ?>
 
-<div class="d-flex flex-grow-1">
+<div class="d-flex flex-grow-1 flex-column flex-lg-row">
     <?php require_once __DIR__ . '/includes/sidebar.php'; ?>
 
     <main class="main-content flex-grow-1 p-3 p-md-4 p-xl-5">

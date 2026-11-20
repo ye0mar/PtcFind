@@ -574,12 +574,25 @@ function renderEditImageSection(item, colClass = 'col-12 col-md-6') {
   </div>`;
 }
 
+function assetUrl(relPath) {
+  const clean = String(relPath || '').replace(/^\/+/, '');
+  const fullPath = path.join(__dirname, clean);
+  let v = '';
+  try {
+    const st = fs.statSync(fullPath);
+    if (st.isFile()) {
+      v = `?v=${Math.floor(st.mtimeMs)}`;
+    }
+  } catch (_) {}
+  return `/${clean}${v}`;
+}
+
 function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
   const u = currentUser();
   const pageTitle = title ? `${esc(title)} - FoundU` : 'FoundU - Lost & Found Management System';
   const unreadNotificationsCount = u ? getUnreadNotificationCount(u.id) : 0;
 
-  const extraLinks = extraCss.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n    ');
+  const extraLinks = extraCss.map((c) => `<link rel="stylesheet" href="${assetUrl(c)}">`).join('\n    ');
 
   const navbarHtml = u ? `
     <nav class="navbar navbar-light sticky-top main-navbar">
@@ -750,14 +763,17 @@ function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${pageTitle}</title>
     <meta name="description" content="FoundU Campus Lost and Found Management System">
+    <link rel="icon" type="image/png" href="${assetUrl('assets/aistudio/image_8911a931.png')}">
+    <link rel="shortcut icon" type="image/png" href="${assetUrl('assets/aistudio/image_8911a931.png')}">
+    <link rel="apple-touch-icon" href="${assetUrl('assets/aistudio/image_8911a931.png')}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <link rel="stylesheet" href="/assets/css/style.css">
-    <link rel="stylesheet" href="/assets/css/forms.css">
-    <link rel="stylesheet" href="/assets/css/responsive.css">
+    <link rel="stylesheet" href="${assetUrl('assets/css/style.css')}">
+    <link rel="stylesheet" href="${assetUrl('assets/css/forms.css')}">
+    <link rel="stylesheet" href="${assetUrl('assets/css/responsive.css')}">
     ${extraLinks}
 </head>
 <body class="bg-light"${u ? ` data-user-id="${u.id}" data-notifications-api="/notifications/api.php"` : ''}>
@@ -768,7 +784,7 @@ function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
 </div>
 ${modalsHtml}
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="/assets/js/main.js"></script>
+<script src="${assetUrl('assets/js/main.js')}"></script>
 </body>
 </html>`;
 }
@@ -2809,16 +2825,38 @@ const server = http.createServer(async (req, res) => {
   const reqPath = parsedUrl.pathname;
   const query = Object.fromEntries(parsedUrl.searchParams.entries());
 
-  // Serve static assets (css, js, images)
-  if (reqPath.startsWith('/assets/') || reqPath.startsWith('/uploads/') || reqPath.startsWith('/picture/')) {
-    const safePath = path.normalize(reqPath).replace(/^(\.\.[/\\])+/, '');
-    const filePath = path.join(__dirname, safePath);
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-      const ext = path.extname(filePath).toLowerCase();
-      res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
-      fs.createReadStream(filePath).pipe(res);
+  // Serve favicon.ico directly
+  if (reqPath === '/favicon.ico') {
+    const favPath = path.join(__dirname, 'assets', 'aistudio', 'image_8911a931.png');
+    if (fs.existsSync(favPath) && fs.statSync(favPath).isFile()) {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache, must-revalidate' });
+      fs.createReadStream(favPath).pipe(res);
       return;
     }
+  }
+
+  // Serve static assets (css, js, images)
+  if (reqPath.startsWith('/assets/') || reqPath.startsWith('/uploads/') || reqPath.startsWith('/picture/')) {
+    const resolvedPath = path.resolve(__dirname, '.' + reqPath);
+    const allowedRoots = [
+      path.join(__dirname, 'assets') + path.sep,
+      path.join(__dirname, 'uploads') + path.sep,
+      path.join(__dirname, 'picture') + path.sep,
+    ];
+    const isAllowed = allowedRoots.some((root) => resolvedPath.startsWith(root));
+    if (isAllowed && fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+      const ext = path.extname(resolvedPath).toLowerCase();
+      const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
+      if (ext === '.css' || ext === '.js') {
+        headers['Cache-Control'] = 'no-cache, must-revalidate';
+      }
+      res.writeHead(200, headers);
+      fs.createReadStream(resolvedPath).pipe(res);
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not Found');
+    return;
   }
 
   // Logout

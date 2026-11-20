@@ -21,6 +21,9 @@ $headerUser = current_user();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= sanitize($pageTitle) ?></title>
     <meta name="description" content="FoundU Campus Lost and Found Management System">
+    <link rel="icon" type="image/png" href="<?= sanitize(asset_url('assets/aistudio/image_8911a931.png')) ?>">
+    <link rel="shortcut icon" type="image/png" href="<?= sanitize(asset_url('assets/aistudio/image_8911a931.png')) ?>">
+    <link rel="apple-touch-icon" href="<?= sanitize(asset_url('assets/aistudio/image_8911a931.png')) ?>">
     <?php if ($headerUser): ?>
         <meta name="csrf-token" content="<?= sanitize(generate_csrf_token()) ?>">
     <?php endif; ?>
@@ -31,18 +34,18 @@ $headerUser = current_user();
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <!-- Bootstrap 5 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
     <!-- Font Awesome 6 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="<?= base_url('assets/css/style.css') ?>">
-    <link rel="stylesheet" href="<?= base_url('assets/css/forms.css') ?>">
-    <link rel="stylesheet" href="<?= base_url('assets/css/responsive.css') ?>">
+    <link rel="stylesheet" href="<?= sanitize(asset_url('assets/css/style.css')) ?>">
+    <link rel="stylesheet" href="<?= sanitize(asset_url('assets/css/forms.css')) ?>">
+    <link rel="stylesheet" href="<?= sanitize(asset_url('assets/css/responsive.css')) ?>">
     <?php if (isset($extraCss)): ?>
         <?php foreach ($extraCss as $cssFile): ?>
-            <link rel="stylesheet" href="<?= base_url($cssFile) ?>">
+            <link rel="stylesheet" href="<?= sanitize(asset_url($cssFile)) ?>">
         <?php endforeach; ?>
     <?php endif; ?>
 </head>

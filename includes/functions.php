@@ -74,21 +74,83 @@ function get_setting(string $key, string $default = ''): string {
 }
 
 /**
- * Retrieve base application URL dynamically.
+ * Retrieve base application URL dynamically across root, subfolder, and proxy deployments.
  */
 function base_url(string $path = ''): string {
-    $scriptDir = dirname($_SERVER['SCRIPT_NAME'] ?? '');
-    // Normalize path separators on Windows (XAMPP)
-    $scriptDir = str_replace('\\', '/', $scriptDir);
-    
-    $subfolders = ['lost_items', 'found_items', 'matches', 'admin', 'profile', 'setup', 'notifications'];
-    $root = rtrim($scriptDir, '/');
-    if (preg_match('#/(' . implode('|', $subfolders) . ')$#', $root)) {
-        $root = preg_replace('#/(' . implode('|', $subfolders) . ')$#', '', $root);
+    static $cachedRoot = null;
+
+    if ($cachedRoot === null) {
+        $root = '';
+        $appFsRoot = realpath(__DIR__ . '/..');
+        $docFsRoot = !empty($_SERVER['DOCUMENT_ROOT']) ? realpath($_SERVER['DOCUMENT_ROOT']) : false;
+
+        if ($appFsRoot && $docFsRoot) {
+            $normApp = rtrim(str_replace('\\', '/', $appFsRoot), '/');
+            $normDoc = rtrim(str_replace('\\', '/', $docFsRoot), '/');
+            if (strcasecmp($normApp, $normDoc) === 0) {
+                $root = '';
+            } elseif (stripos($normApp, $normDoc . '/') === 0) {
+                $root = substr($normApp, strlen($normDoc));
+            } else {
+                $docFsRoot = false; // Fall through to SCRIPT_NAME inspection
+            }
+        }
+
+        if (!$docFsRoot) {
+            $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? ($_SERVER['PHP_SELF'] ?? '/'));
+            if ($scriptName === '' || $scriptName[0] !== '/') {
+                $scriptName = '/' . ltrim($scriptName, '/');
+            }
+            $scriptDir = rtrim(dirname($scriptName), '/');
+            if ($scriptDir === '.') {
+                $scriptDir = '';
+            }
+            $subfolders = ['lost_items', 'found_items', 'matches', 'admin', 'profile', 'setup', 'notifications'];
+            $pattern = '#/(' . implode('|', $subfolders) . ')$#';
+            if (preg_match($pattern, $scriptDir)) {
+                $scriptDir = (string)preg_replace($pattern, '', $scriptDir);
+            }
+            $root = $scriptDir;
+        }
+
+        $cachedRoot = ($root === '' || $root === '/') ? '' : '/' . trim($root, '/');
     }
-    
+
     $cleanPath = ltrim($path, '/');
-    return rtrim($root, '/') . ($cleanPath ? '/' . $cleanPath : '');
+    return $cachedRoot . ($cleanPath ? '/' . $cleanPath : '');
+}
+
+/**
+ * Resolve a deterministic relative URL with cache-busting version for CSS/JS assets.
+ * Works regardless of web server URL rewriting, reverse proxies, or subfolder deployment.
+ */
+function asset_url(string $path): string {
+    $cleanPath = ltrim($path, '/');
+    $appFsRoot = realpath(__DIR__ . '/..');
+    $scriptFile = $_SERVER['SCRIPT_FILENAME'] ?? '';
+    $scriptDirFs = $scriptFile ? realpath(dirname($scriptFile)) : false;
+
+    $prefix = '';
+    if ($appFsRoot && $scriptDirFs) {
+        $normApp = rtrim(str_replace('\\', '/', $appFsRoot), '/');
+        $normScriptDir = rtrim(str_replace('\\', '/', $scriptDirFs), '/');
+        if (strcasecmp($normScriptDir, $normApp) === 0) {
+            $prefix = '';
+        } elseif (stripos($normScriptDir, $normApp . '/') === 0) {
+            $rel = trim(substr($normScriptDir, strlen($normApp)), '/');
+            $depth = $rel === '' ? 0 : (substr_count($rel, '/') + 1);
+            $prefix = str_repeat('../', $depth);
+        } else {
+            return base_url($cleanPath);
+        }
+    } else {
+        $prefix = base_url('') !== '' ? rtrim(base_url(''), '/') . '/' : '/';
+    }
+
+    $fullFsPath = $appFsRoot ? $appFsRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $cleanPath) : '';
+    $version = ($fullFsPath && is_file($fullFsPath)) ? ('?v=' . filemtime($fullFsPath)) : '';
+
+    return $prefix . $cleanPath . $version;
 }
 
 /**
