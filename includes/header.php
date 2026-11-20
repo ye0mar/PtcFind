@@ -10,8 +10,8 @@ require_once __DIR__ . '/csrf.php';
 require_once __DIR__ . '/flash_messages.php';
 require_once __DIR__ . '/notifications.php';
 
-$pageTitle = isset($pageTitle) ? $pageTitle . ' - FoundU' : 'FoundU - Lost & Found Management System';
-$systemName = get_setting('system_name', 'FoundU - Lost & Found Management System');
+$pageTitle = isset($pageTitle) ? $pageTitle . ' - FoundU' : 'FoundU';
+$systemName = get_setting('system_name', 'Lost & Found Management System');
 $headerUser = current_user();
 ?>
 <!DOCTYPE html>

@@ -39,7 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$systemName = get_setting('system_name', 'FoundU - Lost & Found Management System');
+$systemName = get_setting('system_name', 'Lost & Found Management System');
 $orgName    = get_setting('organization_name', 'Polytechnic Campus Administration');
 $perPage    = get_setting('items_per_page', '15');
 

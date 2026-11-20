@@ -32,7 +32,7 @@ const mimeTypes = {
 // In-memory store initialized with seed data matching database/lost_and_found_db.sql
 const state = {
   settings: {
-    system_name: 'FoundU - Lost & Found Management System',
+    system_name: 'Lost & Found Management System',
     organization_name: 'Polytechnic Campus Administration',
     items_per_page: '15',
   },
@@ -158,7 +158,12 @@ function loadState() {
       const raw = fs.readFileSync(STATE_FILE, 'utf8');
       const saved = JSON.parse(raw);
       if (saved && typeof saved === 'object') {
-        if (saved.settings) state.settings = { ...state.settings, ...saved.settings };
+        if (saved.settings) {
+          state.settings = { ...state.settings, ...saved.settings };
+          if (state.settings.system_name === 'FoundU - Lost & Found Management System') {
+            state.settings.system_name = 'Lost & Found Management System';
+          }
+        }
         if (Array.isArray(saved.users) && saved.users.length) state.users = saved.users;
         if (Array.isArray(saved.lostItems)) state.lostItems = saved.lostItems;
         if (Array.isArray(saved.foundItems)) state.foundItems = saved.foundItems;

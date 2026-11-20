@@ -73,7 +73,8 @@ require_once __DIR__ . '/includes/header.php';
                                 <i class="fa-solid fa-magnifying-glass fs-3"></i>
                             </div>
                             <h3 class="auth-brand-title mb-1">FoundU</h3>
-                            <p class="font-meta text-muted small mb-0"><?= sanitize(get_setting('system_name', 'Lost & Found Management System')) ?></p>
+                            <?php $loginSubtitle = get_setting('system_name', 'Lost & Found Management System'); if ($loginSubtitle === 'FoundU - Lost & Found Management System') { $loginSubtitle = 'Lost & Found Management System'; } ?>
+                            <p class="font-meta text-muted small mb-0"><?= sanitize($loginSubtitle) ?></p>
                         </div>
 
                         <!-- Flash / Error alerts -->

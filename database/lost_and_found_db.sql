@@ -197,7 +197,7 @@ INSERT INTO `categories` (`id`, `name`) VALUES
 ON DUPLICATE KEY UPDATE `id`=`id`;
 
 INSERT INTO `system_settings` (`setting_key`, `setting_value`) VALUES
-('system_name', 'FoundU - Lost & Found Management System'),
+('system_name', 'Lost & Found Management System'),
 ('organization_name', 'Polytechnic Campus Administration'),
 ('default_status_lost', 'open'),
 ('default_status_found', 'available'),
