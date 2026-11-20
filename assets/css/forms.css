@@ -27,11 +27,17 @@
     background-color: var(--fu-surface) !important;
 }
 
+.input-group {
+    border-radius: 10px;
+    transition: box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
 .input-group-text {
     border: 1px solid var(--fu-border);
     border-radius: 10px;
     color: var(--fu-primary);
     background-color: var(--fu-surface);
+    transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
 }
 
 .input-group > .form-control {
@@ -49,6 +55,27 @@
     border-color: var(--fu-secondary);
     background-color: var(--fu-surface) !important;
     box-shadow: 0 0 0 0.22rem rgba(49, 133, 245, 0.14);
+}
+
+.input-group:focus-within {
+    box-shadow: 0 0 0 0.22rem rgba(49, 133, 245, 0.16);
+}
+
+.input-group:focus-within .input-group-text {
+    border-color: var(--fu-secondary) !important;
+    background-color: var(--fu-surface) !important;
+    color: var(--fu-primary) !important;
+}
+
+.input-group:focus-within .input-group-text i {
+    color: var(--fu-primary) !important;
+}
+
+.input-group:focus-within .form-control,
+.input-group:focus-within .form-select {
+    border-color: var(--fu-secondary) !important;
+    background-color: var(--fu-surface) !important;
+    box-shadow: none !important;
 }
 
 .form-label {

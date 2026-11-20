@@ -5,6 +5,17 @@
  */
 
 if (session_status() === PHP_SESSION_NONE) {
+    @ini_set('session.gc_maxlifetime', '86400');
+    @ini_set('session.cookie_lifetime', '86400');
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && stripos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false);
+    session_set_cookie_params([
+        'lifetime' => 86400,
+        'path'     => '/',
+        'httponly' => true,
+        'secure'   => $isHttps,
+        'samesite' => 'Lax',
+    ]);
     session_start();
 }
 

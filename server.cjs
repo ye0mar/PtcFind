@@ -3,11 +3,16 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const querystring = require('querystring');
+const { AsyncLocalStorage } = require('async_hooks');
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const STATE_FILE = path.join(__dirname, 'database', '.preview_state.json');
+const SESSION_COOKIE = 'foundu_sid';
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const sessions = new Map();
+const sessionStore = new AsyncLocalStorage();
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -26,8 +31,6 @@ const mimeTypes = {
 
 // In-memory store initialized with seed data matching database/lost_and_found_db.sql
 const state = {
-  loggedInUserId: 1,
-  flash: [],
   settings: {
     system_name: 'FoundU - Lost & Found Management System',
     organization_name: 'Polytechnic Campus Administration',
@@ -155,7 +158,6 @@ function loadState() {
       const raw = fs.readFileSync(STATE_FILE, 'utf8');
       const saved = JSON.parse(raw);
       if (saved && typeof saved === 'object') {
-        if ('loggedInUserId' in saved) state.loggedInUserId = saved.loggedInUserId;
         if (saved.settings) state.settings = { ...state.settings, ...saved.settings };
         if (Array.isArray(saved.users) && saved.users.length) state.users = saved.users;
         if (Array.isArray(saved.lostItems)) state.lostItems = saved.lostItems;
@@ -165,6 +167,19 @@ function loadState() {
         if (Array.isArray(saved.backupLogs)) state.backupLogs = saved.backupLogs;
         if (Array.isArray(saved.notifications)) state.notifications = saved.notifications;
         if (saved.nextIds) state.nextIds = { ...state.nextIds, ...saved.nextIds };
+        if (saved.sessions && typeof saved.sessions === 'object') {
+          const now = Date.now();
+          for (const [sid, s] of Object.entries(saved.sessions)) {
+            if (s && typeof s === 'object' && (!s.expiresAt || s.expiresAt > now)) {
+              sessions.set(sid, {
+                id: sid,
+                userId: s.userId || null,
+                flash: Array.isArray(s.flash) ? s.flash : [],
+                expiresAt: s.expiresAt || (now + SESSION_TTL_MS),
+              });
+            }
+          }
+        }
       }
     }
   } catch (err) {
@@ -178,8 +193,18 @@ function saveState() {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    const now = Date.now();
+    const persistedSessions = {};
+    for (const [sid, s] of sessions.entries()) {
+      if (s && s.userId && (!s.expiresAt || s.expiresAt > now)) {
+        persistedSessions[sid] = {
+          userId: s.userId,
+          flash: Array.isArray(s.flash) ? s.flash : [],
+          expiresAt: s.expiresAt || (now + SESSION_TTL_MS),
+        };
+      }
+    }
     const snapshot = {
-      loggedInUserId: state.loggedInUserId,
       settings: state.settings,
       users: state.users,
       lostItems: state.lostItems,
@@ -189,6 +214,7 @@ function saveState() {
       backupLogs: state.backupLogs,
       notifications: state.notifications,
       nextIds: state.nextIds,
+      sessions: persistedSessions,
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(snapshot, null, 2), 'utf8');
   } catch (err) {
@@ -232,9 +258,71 @@ function fmtDateTime(str) {
     ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
+function parseCookies(req) {
+  const header = req.headers.cookie || '';
+  const out = {};
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
+  }
+  return out;
+}
+
+function isHttpsRequest(req) {
+  const fwdProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  const forwarded = String(req.headers.forwarded || '').toLowerCase();
+  const origin = String(req.headers.origin || '').toLowerCase();
+  const referer = String(req.headers.referer || '').toLowerCase();
+  const host = String(req.headers.host || '').toLowerCase();
+  return !!(
+    req.socket.encrypted ||
+    fwdProto.includes('https') ||
+    forwarded.includes('proto=https') ||
+    origin.startsWith('https://') ||
+    referer.startsWith('https://') ||
+    host.includes('.run.app')
+  );
+}
+
+function buildSessionCookie(req, sid) {
+  const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
+  if (isHttpsRequest(req)) {
+    return `${SESSION_COOKIE}=${sid}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=None; Secure; Partitioned`;
+  }
+  return `${SESSION_COOKIE}=${sid}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax`;
+}
+
+function getOrCreateSession(req, res) {
+  const cookies = parseCookies(req);
+  let sid = cookies[SESSION_COOKIE];
+  let sess = sid && sessions.get(sid);
+  const now = Date.now();
+  if (sess && sess.expiresAt && sess.expiresAt <= now) {
+    sessions.delete(sid);
+    sess = null;
+  }
+  if (!sess) {
+    sid = crypto.randomBytes(24).toString('hex');
+    sess = { id: sid, userId: null, flash: [], expiresAt: now + SESSION_TTL_MS };
+    sessions.set(sid, sess);
+    res.setHeader('Set-Cookie', buildSessionCookie(req, sid));
+  } else {
+    sess.expiresAt = now + SESSION_TTL_MS;
+  }
+  return sess;
+}
+
+function currentSession() {
+  return sessionStore.getStore() || null;
+}
+
 function currentUser() {
-  if (!state.loggedInUserId) return null;
-  return state.users.find((u) => u.id === state.loggedInUserId) || null;
+  const sess = currentSession();
+  if (!sess || !sess.userId) return null;
+  return state.users.find((u) => u.id === sess.userId && u.status === 'active') || null;
 }
 
 function isAdmin() {
@@ -243,12 +331,16 @@ function isAdmin() {
 }
 
 function setFlash(type, message) {
-  state.flash.push({ type, message });
+  const sess = currentSession();
+  if (sess) {
+    sess.flash.push({ type, message });
+  }
 }
 
 function renderFlash() {
-  if (!state.flash.length) return '';
-  const items = state.flash.splice(0, state.flash.length);
+  const sess = currentSession();
+  if (!sess || !sess.flash.length) return '';
+  const items = sess.flash.splice(0, sess.flash.length);
   let html = '<div class="flash-messages-container mb-4">';
   for (const msg of items) {
     let alertClass = 'alert-info';
@@ -836,25 +928,10 @@ function renderLoginPage(error = '', usernameVal = '') {
 
                                 <div class="d-grid mb-3">
                                     <button type="submit" class="btn btn-primary py-2 fw-semibold">
-                                        <span>Sign In to Dashboard</span>
-                                        <i class="fa-solid fa-arrow-right"></i>
+                                        <span>Login</span>
                                     </button>
                                 </div>
                             </form>
-
-                            <div class="auth-credentials-box p-3 mt-4 small">
-                                <div class="fw-bold mb-2 text-dark d-flex align-items-center gap-2">
-                                    <i class="fa-solid fa-shield-halved text-primary"></i> Default XAMPP Credentials
-                                </div>
-                                <div class="d-flex justify-content-between py-1 border-bottom">
-                                    <span>Admin: <code>admin</code></span>
-                                    <span>Pass: <code>admin123</code></span>
-                                </div>
-                                <div class="d-flex justify-content-between pt-2">
-                                    <span>Staff: <code>staff</code></span>
-                                    <span>Pass: <code>staff123</code></span>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -2859,66 +2936,82 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Logout
-  if (reqPath === '/logout.php') {
-    const u = currentUser();
-    if (u) logActivity('LOGOUT', 'users', u.id, `User ${u.username} logged out`);
-    state.loggedInUserId = null;
-    saveState();
-    setFlash('info', 'You have been successfully logged out.');
-    return redirect(res, '/login.php');
-  }
+  // Dynamic routes run inside per-browser cookie session scope with no-store cache headers
+  const sess = getOrCreateSession(req, res);
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Pragma', 'no-cache');
 
-  // Login
-  if (reqPath === '/login.php') {
-    if (currentUser()) return redirect(res, '/dashboard.php');
-    if (req.method === 'POST') {
-      const body = await parseBody(req);
-      const username = (body.username || '').trim();
-      const password = body.password || '';
-      if (!username || !password) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderLoginPage('Please enter both username and password.', username));
-      }
-      const user = state.users.find((u) => u.username === username);
-      if (!user || user.password !== password) {
-        logActivity('FAILED_LOGIN', 'users', null, `Failed login attempt for username: ${username}`);
-        saveState();
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderLoginPage('Invalid username or password.', username));
-      }
-      if (user.status !== 'active') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderLoginPage('Your account has been deactivated. Please contact an administrator.', username));
-      }
-      state.loggedInUserId = user.id;
-      user.last_login = nowStr();
-      logActivity('LOGIN', 'users', user.id, `User ${user.username} logged in successfully`);
+  return sessionStore.run(sess, async () => {
+    // Logout
+    if (reqPath === '/logout.php') {
+      const u = currentUser();
+      if (u) logActivity('LOGOUT', 'users', u.id, `User ${u.username} logged out`);
+      sess.userId = null;
       saveState();
-      setFlash('success', `Welcome back, ${user.full_name}!`);
+      res.setHeader('Set-Cookie', buildSessionCookie(req, sess.id));
+      setFlash('info', 'You have been successfully logged out.');
+      return redirect(res, '/login.php');
+    }
+
+    // Login (always stays on login page on GET/refresh)
+    if (reqPath === '/login.php') {
+      if (req.method === 'POST') {
+        const body = await parseBody(req);
+        const username = (body.username || '').trim();
+        const password = body.password || '';
+        if (!username || !password) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          return res.end(renderLoginPage('Please enter both username and password.', username));
+        }
+        const user = state.users.find((u) => u.username === username);
+        if (!user || user.password !== password) {
+          logActivity('FAILED_LOGIN', 'users', null, `Failed login attempt for username: ${username}`);
+          saveState();
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          return res.end(renderLoginPage('Invalid username or password.', username));
+        }
+        if (user.status !== 'active') {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          return res.end(renderLoginPage('Your account has been deactivated. Please contact an administrator.', username));
+        }
+        sess.userId = user.id;
+        sess.expiresAt = Date.now() + SESSION_TTL_MS;
+        user.last_login = nowStr();
+        logActivity('LOGIN', 'users', user.id, `User ${user.username} logged in successfully`);
+        saveState();
+        res.setHeader('Set-Cookie', buildSessionCookie(req, sess.id));
+        setFlash('success', `Welcome back, ${user.full_name}!`);
+        return redirect(res, '/dashboard.php');
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(renderLoginPage());
+    }
+
+    // Root entry point: open system at login when unauthenticated, dashboard when logged in
+    if (reqPath === '/' || reqPath === '/index.php' || reqPath === '/index.html') {
+      if (!currentUser()) {
+        return redirect(res, '/login.php');
+      }
       return redirect(res, '/dashboard.php');
     }
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(renderLoginPage());
-  }
 
-  // API auth check (return 401 JSON instead of HTML redirect when unauthenticated)
-  if (reqPath === '/notifications/api.php' && !currentUser()) {
-    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-    return res.end(JSON.stringify({ ok: false, error: 'Authentication required.' }));
-  }
+    // API auth check (return 401 JSON instead of HTML redirect when unauthenticated)
+    if (reqPath === '/notifications/api.php' && !currentUser()) {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: false, error: 'Authentication required.' }));
+    }
 
-  // Require login for app routes
-  if (!currentUser()) {
-    setFlash('error', 'Please log in to access this page.');
-    return redirect(res, '/login.php');
-  }
+    // Require login for app routes
+    if (!currentUser()) {
+      setFlash('error', 'Please log in to access this page.');
+      return redirect(res, '/login.php');
+    }
 
-  // Root & Dashboard
-  if (reqPath === '/' || reqPath === '/index.php' || reqPath === '/index.html' || reqPath === '/dashboard.php') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(renderDashboardPage());
-  }
+    // Dashboard
+    if (reqPath === '/dashboard.php') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(renderDashboardPage());
+    }
 
   // Lost Items
   if (reqPath === '/lost_items/index.php') {
@@ -3523,8 +3616,9 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Fallback to dashboard
-  return redirect(res, '/dashboard.php');
+    // Fallback to dashboard
+    return redirect(res, '/dashboard.php');
+  });
 });
 
 server.listen(PORT, HOST, () => {

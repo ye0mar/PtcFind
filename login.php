@@ -8,12 +8,6 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/flash_messages.php';
 
-// If already logged in, redirect to dashboard
-if (is_logged_in()) {
-    header('Location: ' . base_url('dashboard.php'));
-    exit;
-}
-
 $error = '';
 $usernameVal = '';
 
@@ -79,7 +73,7 @@ require_once __DIR__ . '/includes/header.php';
                                 <i class="fa-solid fa-magnifying-glass fs-3"></i>
                             </div>
                             <h3 class="auth-brand-title mb-1">FoundU</h3>
-                            <p class="font-meta text-muted small mb-0"><?= sanitize(get_setting('system_name', 'FoundU - Lost & Found Management System')) ?></p>
+                            <p class="font-meta text-muted small mb-0"><?= sanitize(get_setting('system_name', 'Lost & Found Management System')) ?></p>
                         </div>
 
                         <!-- Flash / Error alerts -->
@@ -118,26 +112,10 @@ require_once __DIR__ . '/includes/header.php';
 
                             <div class="d-grid mb-3">
                                 <button type="submit" class="btn btn-primary py-2 fw-semibold">
-                                    <span>Sign In to Dashboard</span>
-                                    <i class="fa-solid fa-arrow-right"></i>
+                                    <span>Login</span>
                                 </button>
                             </div>
                         </form>
-
-                        <!-- Seed Credentials Help Box -->
-                        <div class="auth-credentials-box p-3 mt-4 small">
-                            <div class="fw-bold mb-2 text-dark d-flex align-items-center gap-2">
-                                <i class="fa-solid fa-shield-halved text-primary"></i> Default XAMPP Credentials
-                            </div>
-                            <div class="d-flex justify-content-between py-1 border-bottom">
-                                <span>Admin: <code>admin</code></span>
-                                <span>Pass: <code>admin123</code></span>
-                            </div>
-                            <div class="d-flex justify-content-between pt-2">
-                                <span>Staff: <code>staff</code></span>
-                                <span>Pass: <code>staff123</code></span>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>

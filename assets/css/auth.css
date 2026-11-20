@@ -30,20 +30,3 @@
     color: var(--fu-primary);
     letter-spacing: -0.01em;
 }
-
-.auth-credentials-box {
-    background-color: var(--fu-surface-alt);
-    border: 1px solid var(--fu-border);
-    border-radius: 12px;
-    font-family: var(--font-meta);
-    color: var(--fu-text-muted);
-}
-
-.auth-credentials-box code {
-    color: var(--fu-primary);
-    background-color: var(--fu-accent);
-    padding: 0.14rem 0.5rem;
-    border-radius: 9999px;
-    font-family: var(--font-body);
-    font-weight: 600;
-}
