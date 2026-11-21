@@ -3339,7 +3339,7 @@ const server = http.createServer(async (req, res) => {
       logActivity('CREATE_LOST_ITEM', 'lost_items', newItem.id, `Reported lost item: ${itemName}`);
       saveState();
       setFlash('success', `Lost item '${itemName}' recorded successfully.`);
-      return redirect(res, `/lost_items/view.php?id=${newItem.id}`);
+      return redirect(res, '/lost_items/index.php');
     }
     if (action === 'update') {
       const id = Number(body.id || 0);
