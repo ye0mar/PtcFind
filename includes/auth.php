@@ -14,7 +14,7 @@ if (session_status() === PHP_SESSION_NONE) {
         'path'     => '/',
         'httponly' => true,
         'secure'   => $isHttps,
-        'samesite' => 'Lax',
+        'samesite' => $isHttps ? 'None' : 'Lax',
     ]);
     session_start();
 }
@@ -114,15 +114,17 @@ function logout_user(): void {
 
     if (ini_get("session.use_cookies")) {
         $params = session_get_cookie_params();
-        setcookie(
-            session_name(),
-            '',
-            time() - 42000,
-            $params["path"],
-            $params["domain"],
-            $params["secure"],
-            $params["httponly"]
-        );
+        $cookieOptions = [
+            'expires'  => time() - 42000,
+            'path'     => $params['path'] ?: '/',
+            'domain'   => $params['domain'] ?? '',
+            'secure'   => (bool)($params['secure'] ?? false),
+            'httponly' => (bool)($params['httponly'] ?? true),
+        ];
+        if (!empty($params['samesite'])) {
+            $cookieOptions['samesite'] = $params['samesite'];
+        }
+        setcookie(session_name(), '', $cookieOptions);
     }
 
     session_destroy();

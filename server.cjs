@@ -10,8 +10,13 @@ const HOST = '0.0.0.0';
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const STATE_FILE = path.join(__dirname, 'database', '.preview_state.json');
 const SESSION_COOKIE = 'foundu_sid';
+const PROBE_COOKIE = 'foundu_ck';
+const FLASH_COOKIE = 'foundu_fl';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_SECRET = process.env.SESSION_SECRET ||
+  crypto.createHash('sha256').update('foundu-stateless-session-v1:' + __dirname).digest('hex');
 const sessions = new Map();
+const revokedSids = new Set();
 const sessionStore = new AsyncLocalStorage();
 
 const mimeTypes = {
@@ -271,19 +276,25 @@ function parseCookies(req) {
     if (idx === -1) continue;
     const k = part.slice(0, idx).trim();
     const v = part.slice(idx + 1).trim();
-    if (k) out[k] = decodeURIComponent(v);
+    if (!k) continue;
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch (_) {
+      out[k] = v;
+    }
   }
   return out;
 }
 
 function isHttpsRequest(req) {
+  if (!req) return false;
   const fwdProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
   const forwarded = String(req.headers.forwarded || '').toLowerCase();
   const origin = String(req.headers.origin || '').toLowerCase();
   const referer = String(req.headers.referer || '').toLowerCase();
   const host = String(req.headers.host || '').toLowerCase();
   return !!(
-    req.socket.encrypted ||
+    (req.socket && req.socket.encrypted) ||
     fwdProto.includes('https') ||
     forwarded.includes('proto=https') ||
     origin.startsWith('https://') ||
@@ -292,36 +303,169 @@ function isHttpsRequest(req) {
   );
 }
 
-function buildSessionCookie(req, sid) {
-  const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
-  if (isHttpsRequest(req)) {
-    return `${SESSION_COOKIE}=${sid}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=None; Secure; Partitioned`;
-  }
-  return `${SESSION_COOKIE}=${sid}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax`;
+function base64UrlEncode(input) {
+  return Buffer.from(input).toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function getOrCreateSession(req, res) {
-  const cookies = parseCookies(req);
-  let sid = cookies[SESSION_COOKIE];
-  let sess = sid && sessions.get(sid);
-  const now = Date.now();
-  if (sess && sess.expiresAt && sess.expiresAt <= now) {
-    sessions.delete(sid);
-    sess = null;
+function base64UrlDecode(str) {
+  let s = String(str || '').replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return Buffer.from(s, 'base64').toString('utf8');
+}
+
+function signToken(payload) {
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const sig = base64UrlEncode(crypto.createHmac('sha256', SESSION_SECRET).update(body).digest());
+  return `${body}.${sig}`;
+}
+
+function verifyToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const dot = token.indexOf('.');
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  if (!body || !sig) return null;
+  const expectedSig = base64UrlEncode(crypto.createHmac('sha256', SESSION_SECRET).update(body).digest());
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expectedSig);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const data = JSON.parse(base64UrlDecode(body));
+    if (!data || typeof data !== 'object') return null;
+    if (data.exp && Date.now() > Number(data.exp)) return null;
+    return data;
+  } catch (_) {
+    return null;
   }
-  if (!sess) {
-    sid = crypto.randomBytes(24).toString('hex');
-    sess = { id: sid, userId: null, flash: [], expiresAt: now + SESSION_TTL_MS };
-    sessions.set(sid, sess);
-    res.setHeader('Set-Cookie', buildSessionCookie(req, sid));
+}
+
+function buildCookieString(req, name, value, { maxAgeSec = Math.floor(SESSION_TTL_MS / 1000), httpOnly = true } = {}) {
+  const parts = [`${name}=${value}`, 'Path=/', `Max-Age=${maxAgeSec}`];
+  if (httpOnly) parts.push('HttpOnly');
+  if (isHttpsRequest(req)) {
+    parts.push('SameSite=None', 'Secure', 'Partitioned');
   } else {
-    sess.expiresAt = now + SESSION_TTL_MS;
+    parts.push('SameSite=Lax');
   }
+  return parts.join('; ');
+}
+
+function queueCookie(res, cookieStr) {
+  if (!res || !cookieStr || res.headersSent) return;
+  if (!Array.isArray(res._queuedCookies)) res._queuedCookies = [];
+  const name = cookieStr.split('=')[0];
+  res._queuedCookies = res._queuedCookies.filter((c) => c.split('=')[0] !== name);
+  res._queuedCookies.push(cookieStr);
+  res.setHeader('Set-Cookie', res._queuedCookies);
+}
+
+function clearCookie(req, res, name, httpOnly = true) {
+  queueCookie(res, buildCookieString(req, name, '', { maxAgeSec: 0, httpOnly }));
+}
+
+function getOrCreateSession(req, res, query = {}) {
+  const cookies = parseCookies(req);
+  const cookieRaw = cookies[SESSION_COOKIE] || '';
+  const urlRaw = (query && typeof query._st === 'string' && query._st) ||
+    (req.headers['x-foundu-token'] ? String(req.headers['x-foundu-token']) : '');
+  const now = Date.now();
+  const hasAnyCookieHeader = !!(cookies[PROBE_COOKIE] || cookies[SESSION_COOKIE]);
+
+  const cookieToken = verifyToken(cookieRaw);
+  const urlToken = verifyToken(urlRaw);
+
+  let chosenToken = null;
+  let chosenRaw = '';
+  let fromCookie = false;
+
+  if (cookieToken && cookieToken.sid && cookieToken.uid && !revokedSids.has(cookieToken.sid)) {
+    chosenToken = cookieToken;
+    chosenRaw = cookieRaw;
+    fromCookie = true;
+  } else if (urlToken && urlToken.sid && urlToken.uid && !revokedSids.has(urlToken.sid)) {
+    chosenToken = urlToken;
+    chosenRaw = urlRaw;
+    fromCookie = false;
+  }
+
+  let sess = null;
+
+  if (chosenToken) {
+    const activeUser = state.users.find((u) => u.id === Number(chosenToken.uid) && u.status === 'active');
+    if (activeUser) {
+      sess = sessions.get(chosenToken.sid) || null;
+      if (!sess) {
+        sess = {
+          id: chosenToken.sid,
+          userId: activeUser.id,
+          flash: [],
+          expiresAt: Number(chosenToken.exp) || (now + SESSION_TTL_MS),
+          signedToken: chosenRaw,
+          tokenFallback: !fromCookie && !hasAnyCookieHeader,
+        };
+        sessions.set(sess.id, sess);
+      } else {
+        sess.userId = activeUser.id;
+        sess.expiresAt = now + SESSION_TTL_MS;
+        sess.signedToken = chosenRaw;
+        sess.tokenFallback = !fromCookie && !hasAnyCookieHeader;
+      }
+    }
+  } else if (cookieRaw && !revokedSids.has(cookieRaw) && sessions.has(cookieRaw)) {
+    const legacySess = sessions.get(cookieRaw);
+    if (legacySess && (!legacySess.expiresAt || legacySess.expiresAt > now)) {
+      sess = legacySess;
+      sess.expiresAt = now + SESSION_TTL_MS;
+      sess.tokenFallback = false;
+      if (sess.userId) {
+        sess.signedToken = signToken({ sid: sess.id, uid: sess.userId, exp: sess.expiresAt });
+        queueCookie(res, buildCookieString(req, SESSION_COOKIE, sess.signedToken, { httpOnly: true }));
+      }
+    } else if (legacySess) {
+      sessions.delete(cookieRaw);
+    }
+  }
+
+  if (!sess) {
+    const sid = crypto.randomBytes(16).toString('hex');
+    sess = {
+      id: sid,
+      userId: null,
+      flash: [],
+      expiresAt: now + SESSION_TTL_MS,
+      signedToken: null,
+      tokenFallback: false,
+    };
+    sessions.set(sid, sess);
+  }
+
+  // Hydrate flash from signed flash cookie if session flash is empty (multi-instance safe)
+  if (cookies[FLASH_COOKIE] && !sess.flash.length) {
+    const flashPayload = verifyToken(cookies[FLASH_COOKIE]);
+    if (flashPayload && Array.isArray(flashPayload.items) && flashPayload.items.length) {
+      sess.flash.push(...flashPayload.items);
+    }
+  }
+
+  // Prevent unbounded in-memory session growth
+  if (sessions.size > 500) {
+    for (const [k, s] of sessions.entries()) {
+      if (!s || (s.expiresAt && s.expiresAt <= now)) sessions.delete(k);
+    }
+  }
+
   return sess;
 }
 
-function currentSession() {
+function currentContext() {
   return sessionStore.getStore() || null;
+}
+
+function currentSession() {
+  const ctx = currentContext();
+  return ctx ? (ctx.sess || null) : null;
 }
 
 function currentUser() {
@@ -336,22 +480,32 @@ function isAdmin() {
 }
 
 function setFlash(type, message) {
-  const sess = currentSession();
+  const ctx = currentContext();
+  const sess = ctx ? ctx.sess : null;
   if (sess) {
     sess.flash.push({ type, message });
+    if (ctx && ctx.req && ctx.res) {
+      const signedFlash = signToken({ items: sess.flash.slice(-5), exp: Date.now() + 120000 });
+      queueCookie(ctx.res, buildCookieString(ctx.req, FLASH_COOKIE, signedFlash, { maxAgeSec: 120, httpOnly: true }));
+    }
   }
 }
 
 function renderFlash() {
-  const sess = currentSession();
+  const ctx = currentContext();
+  const sess = ctx ? ctx.sess : null;
+  if (ctx && ctx.req && ctx.res) {
+    clearCookie(ctx.req, ctx.res, FLASH_COOKIE, true);
+  }
   if (!sess || !sess.flash.length) return '';
   const items = sess.flash.splice(0, sess.flash.length);
+  const filtered = items.filter((msg) => msg.type !== 'success' && msg.type !== 'info');
+  if (!filtered.length) return '';
   let html = '<div class="flash-messages-container mb-4">';
-  for (const msg of items) {
+  for (const msg of filtered) {
     let alertClass = 'alert-info';
     let iconClass = 'fa-circle-info';
-    if (msg.type === 'success') { alertClass = 'alert-success'; iconClass = 'fa-circle-check'; }
-    else if (msg.type === 'error' || msg.type === 'danger') { alertClass = 'alert-danger'; iconClass = 'fa-triangle-exclamation'; }
+    if (msg.type === 'error' || msg.type === 'danger') { alertClass = 'alert-danger'; iconClass = 'fa-triangle-exclamation'; }
     else if (msg.type === 'warning') { alertClass = 'alert-warning'; iconClass = 'fa-circle-exclamation'; }
     html += `<div class="alert ${alertClass} alert-dismissible fade show d-flex align-items-center" role="alert">
       <i class="fa-solid ${iconClass} me-2 fs-5"></i>
@@ -467,8 +621,28 @@ function getUserName(userId, fallback = 'Staff') {
   return u ? u.full_name : fallback;
 }
 
+function appendTokenToLocation(location, token) {
+  if (!token || !location) return location;
+  const s = String(location);
+  if (s.startsWith('/login.php') || s.startsWith('/logout.php')) return location;
+  try {
+    const u = new URL(s, 'http://localhost');
+    if (!u.searchParams.has('_st')) {
+      u.searchParams.set('_st', token);
+    }
+    return u.pathname + u.search + u.hash;
+  } catch (_) {
+    return location;
+  }
+}
+
 function redirect(res, location) {
-  res.writeHead(302, { Location: location });
+  const sess = currentSession();
+  let finalLocation = location;
+  if (sess && sess.userId && sess.tokenFallback && sess.signedToken) {
+    finalLocation = appendTokenToLocation(location, sess.signedToken);
+  }
+  res.writeHead(302, { Location: finalLocation });
   res.end();
 }
 
@@ -531,23 +705,42 @@ function parseMultipart(buf, boundary) {
 
 function parseBody(req) {
   return new Promise((resolve) => {
+    const MAX_BODY_BYTES = 10 * 1024 * 1024;
     const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
+    let totalBytes = 0;
+    let settled = false;
+
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+
+    req.on('data', (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        finish({ _files: {}, _tooLarge: true });
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', () => finish({ _files: {} }));
     req.on('end', () => {
+      if (settled) return;
       const buf = Buffer.concat(chunks);
       const contentType = req.headers['content-type'] || '';
       if (contentType.includes('multipart/form-data')) {
         const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
         const boundary = match ? (match[1] || match[2]).trim() : '';
         if (boundary) {
-          resolve(parseMultipart(buf, boundary));
+          finish(parseMultipart(buf, boundary));
           return;
         }
-        resolve({ _files: {} });
+        finish({ _files: {} });
       } else {
         const parsed = querystring.parse(buf.toString('utf8'));
         parsed._files = {};
-        resolve(parsed);
+        finish(parsed);
       }
     });
   });
@@ -686,7 +879,8 @@ function assetUrl(relPath) {
 
 function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
   const u = currentUser();
-  const pageTitle = title ? `${esc(title)} - FoundU` : 'FoundU - Lost & Found Management System';
+  const sess = currentSession();
+  const pageTitle = title ? `${esc(title)} - FoundU` : 'FoundU';
   const unreadNotificationsCount = u ? getUnreadNotificationCount(u.id) : 0;
 
   const extraLinks = extraCss.map((c) => `<link rel="stylesheet" href="${assetUrl(c)}">`).join('\n    ');
@@ -851,7 +1045,31 @@ function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
             </div>
         </div>
     </div>
+    <div class="modal fade" id="confirmActionModal" tabindex="-1" aria-labelledby="confirmActionModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content border-0 shadow rounded-4">
+                <div class="modal-header border-0 pb-1">
+                    <h5 class="modal-title font-display fw-semibold text-dark d-flex align-items-center gap-2" id="confirmActionModalLabel">
+                        <i class="fa-solid fa-triangle-exclamation text-danger"></i>
+                        <span>Confirm Action</span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body py-2">
+                    <p class="small text-muted mb-0" id="confirmActionModalMessage">Are you sure you want to proceed with this action?</p>
+                </div>
+                <div class="modal-footer border-0 pt-2">
+                    <button type="button" class="btn btn-secondary btn-sm px-3" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger btn-sm px-3" id="confirmActionProceedBtn">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <div id="notificationToastContainer" class="notification-toast-container" aria-live="polite" aria-atomic="true"></div>` : '';
+
+  const bodyAuthAttrs = u
+    ? ` data-user-id="${u.id}" data-notifications-api="/notifications/api.php" data-auth-mode="${sess && sess.tokenFallback ? 'token' : 'cookie'}"${sess && sess.tokenFallback && sess.signedToken ? ` data-session-token="${esc(sess.signedToken)}"` : ''}`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -873,7 +1091,7 @@ function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
     <link rel="stylesheet" href="${assetUrl('assets/css/responsive.css')}">
     ${extraLinks}
 </head>
-<body class="bg-light"${u ? ` data-user-id="${u.id}" data-notifications-api="/notifications/api.php"` : ''}>
+<body class="bg-light"${bodyAuthAttrs}>
 <div class="app-wrapper d-flex flex-column min-vh-100">
     ${navbarHtml}
     ${mainShell}
@@ -1267,7 +1485,7 @@ function renderLostItemsIndex(query) {
                                     <div class="d-inline-flex align-items-center gap-1">
                                         <a href="/lost_items/view.php?id=${item.id}" class="btn btn-view btn-action-icon" title="View details"><i class="fa-solid fa-eye"></i></a>
                                         <a href="/lost_items/edit.php?id=${item.id}" class="btn btn-outline-primary btn-action-icon" title="Edit item"><i class="fa-solid fa-pen-to-square"></i></a>
-                                        <form method="POST" action="/lost_items/process.php" class="d-inline">
+                                        <form method="POST" action="/lost_items/process.php" class="d-inline" data-confirm="Are you sure you want to delete this lost item record?">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="id" value="${item.id}">
                                             <button type="submit" class="btn btn-danger btn-action-icon" title="Delete record"><i class="fa-solid fa-trash"></i></button>
@@ -1394,7 +1612,7 @@ function renderLostItemView(id) {
                 <a href="/lost_items/edit.php?id=${item.id}" class="btn btn-outline-primary btn-sm">
                     <i class="fa-solid fa-pen-to-square"></i> Edit
                 </a>
-                <form method="POST" action="/lost_items/process.php">
+                <form method="POST" action="/lost_items/process.php" data-confirm="Are you sure you want to delete this lost item report?">
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="id" value="${item.id}">
                     <button type="submit" class="btn btn-danger btn-sm">
@@ -1711,7 +1929,7 @@ function renderFoundItemsIndex(query) {
                                     <div class="d-inline-flex align-items-center gap-1">
                                         <a href="/found_items/view.php?id=${item.id}" class="btn btn-view btn-action-icon" title="View details"><i class="fa-solid fa-eye"></i></a>
                                         <a href="/found_items/edit.php?id=${item.id}" class="btn btn-outline-primary btn-action-icon" title="Edit record"><i class="fa-solid fa-pen-to-square"></i></a>
-                                        <form method="POST" action="/found_items/process.php" class="d-inline">
+                                        <form method="POST" action="/found_items/process.php" class="d-inline" data-confirm="Are you sure you want to delete this found item record?">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="id" value="${item.id}">
                                             <button type="submit" class="btn btn-danger btn-action-icon" title="Delete record"><i class="fa-solid fa-trash"></i></button>
@@ -1842,7 +2060,7 @@ function renderFoundItemView(id) {
                 <a href="/found_items/edit.php?id=${item.id}" class="btn btn-outline-primary btn-sm">
                     <i class="fa-solid fa-pen-to-square"></i> Edit
                 </a>
-                <form method="POST" action="/found_items/process.php">
+                <form method="POST" action="/found_items/process.php" data-confirm="Are you sure you want to delete this found item record?">
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="id" value="${item.id}">
                     <button type="submit" class="btn btn-danger btn-sm">
@@ -2138,7 +2356,7 @@ function renderMatchesPage() {
                                                 <span>Return</span>
                                             </button>
                                         </form>` : `<span class="badge status-badge-claimed">RETURNED</span>`}
-                                        <form method="POST" action="/matches/process.php" class="d-inline">
+                                        <form method="POST" action="/matches/process.php" class="d-inline" data-confirm="Unlink this match and restore item statuses?">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="match_id" value="${m.id}">
                                             <button type="submit" class="btn btn-danger btn-action-icon" title="Unlink match">
@@ -2235,7 +2453,7 @@ function renderManageUsersPage() {
                                 <td class="ps-4">
                                     <div class="d-flex align-items-center gap-3">
                                         <div class="user-avatar-circle" style="width: 38px; height: 38px; font-size: 0.95rem;">
-                                            ${esc(u.full_name.charAt(0).toUpperCase())}
+                                            ${esc((u.full_name || 'U').charAt(0).toUpperCase())}
                                         </div>
                                         <div class="fw-semibold text-dark">${esc(u.full_name)}</div>
                                     </div>
@@ -2265,7 +2483,7 @@ function renderManageUsersPage() {
                                                 <i class="fa-solid fa-power-off"></i>
                                             </button>
                                         </form>
-                                        <form method="POST" action="/admin/manage_users.php" class="d-inline">
+                                        <form method="POST" action="/admin/manage_users.php" class="d-inline" data-confirm="Permanently delete this operator account?">
                                             <input type="hidden" name="action" value="delete_user">
                                             <input type="hidden" name="user_id" value="${u.id}">
                                             <button type="submit" class="btn btn-danger btn-action-icon" title="Delete User">
@@ -2728,7 +2946,7 @@ function renderProfilePage() {
                     <div class="card-body p-4 p-md-5">
                         <div class="d-flex align-items-center gap-3 mb-4">
                             <div class="user-avatar-circle" style="width: 58px; height: 58px; font-size: 1.5rem; border-radius: 15px;">
-                                ${esc(u.full_name.charAt(0).toUpperCase())}
+                                ${esc((u.full_name || 'U').charAt(0).toUpperCase())}
                             </div>
                             <div>
                                 <h5 class="font-display fw-semibold text-dark mb-0">${esc(u.full_name)}</h5>
@@ -2903,94 +3121,123 @@ function renderNotificationsPage() {
 }
 
 const server = http.createServer(async (req, res) => {
-  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const reqPath = parsedUrl.pathname;
-  const query = Object.fromEntries(parsedUrl.searchParams.entries());
-
-  // Serve favicon.ico directly
-  if (reqPath === '/favicon.ico') {
-    const favPath = path.join(__dirname, 'assets', 'aistudio', 'image_8911a931.png');
-    if (fs.existsSync(favPath) && fs.statSync(favPath).isFile()) {
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache, must-revalidate' });
-      fs.createReadStream(favPath).pipe(res);
+  try {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    } catch (_) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
       return;
     }
-  }
+    const reqPath = parsedUrl.pathname;
+    const query = Object.fromEntries(parsedUrl.searchParams.entries());
 
-  // Serve static assets (css, js, images)
-  if (reqPath.startsWith('/assets/') || reqPath.startsWith('/uploads/') || reqPath.startsWith('/picture/')) {
-    const resolvedPath = path.resolve(__dirname, '.' + reqPath);
-    const allowedRoots = [
-      path.join(__dirname, 'assets') + path.sep,
-      path.join(__dirname, 'uploads') + path.sep,
-      path.join(__dirname, 'picture') + path.sep,
-    ];
-    const isAllowed = allowedRoots.some((root) => resolvedPath.startsWith(root));
-    if (isAllowed && fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
-      const ext = path.extname(resolvedPath).toLowerCase();
-      const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
-      if (ext === '.css' || ext === '.js') {
-        headers['Cache-Control'] = 'no-cache, must-revalidate';
+    // Serve favicon.ico directly
+    if (reqPath === '/favicon.ico') {
+      const favPath = path.join(__dirname, 'assets', 'aistudio', 'image_8911a931.png');
+      if (fs.existsSync(favPath) && fs.statSync(favPath).isFile()) {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache, must-revalidate' });
+        fs.createReadStream(favPath).pipe(res);
+        return;
       }
-      res.writeHead(200, headers);
-      fs.createReadStream(resolvedPath).pipe(res);
+    }
+
+    // Serve static assets (css, js, images)
+    if (reqPath.startsWith('/assets/') || reqPath.startsWith('/uploads/') || reqPath.startsWith('/picture/')) {
+      const resolvedPath = path.resolve(__dirname, '.' + reqPath);
+      const allowedRoots = [
+        path.join(__dirname, 'assets') + path.sep,
+        path.join(__dirname, 'uploads') + path.sep,
+        path.join(__dirname, 'picture') + path.sep,
+      ];
+      const isAllowed = allowedRoots.some((root) => resolvedPath.startsWith(root));
+      if (isAllowed && fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+        const ext = path.extname(resolvedPath).toLowerCase();
+        const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
+        if (ext === '.css' || ext === '.js') {
+          headers['Cache-Control'] = 'no-cache, must-revalidate';
+        }
+        res.writeHead(200, headers);
+        fs.createReadStream(resolvedPath).pipe(res);
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not Found');
       return;
     }
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Not Found');
-    return;
-  }
 
-  // Dynamic routes run inside per-browser cookie session scope with no-store cache headers
-  const sess = getOrCreateSession(req, res);
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-  res.setHeader('Pragma', 'no-cache');
+    // Dynamic routes run inside per-request session scope with no-store cache headers
+    const sess = getOrCreateSession(req, res, query);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
 
-  return sessionStore.run(sess, async () => {
-    // Logout
-    if (reqPath === '/logout.php') {
-      const u = currentUser();
-      if (u) logActivity('LOGOUT', 'users', u.id, `User ${u.username} logged out`);
-      sess.userId = null;
-      saveState();
-      res.setHeader('Set-Cookie', buildSessionCookie(req, sess.id));
-      setFlash('info', 'You have been successfully logged out.');
-      return redirect(res, '/login.php');
-    }
-
-    // Login (always stays on login page on GET/refresh)
-    if (reqPath === '/login.php') {
-      if (req.method === 'POST') {
-        const body = await parseBody(req);
-        const username = (body.username || '').trim();
-        const password = body.password || '';
-        if (!username || !password) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          return res.end(renderLoginPage('Please enter both username and password.', username));
-        }
-        const user = state.users.find((u) => u.username === username);
-        if (!user || user.password !== password) {
-          logActivity('FAILED_LOGIN', 'users', null, `Failed login attempt for username: ${username}`);
-          saveState();
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          return res.end(renderLoginPage('Invalid username or password.', username));
-        }
-        if (user.status !== 'active') {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          return res.end(renderLoginPage('Your account has been deactivated. Please contact an administrator.', username));
-        }
-        sess.userId = user.id;
-        sess.expiresAt = Date.now() + SESSION_TTL_MS;
-        user.last_login = nowStr();
-        logActivity('LOGIN', 'users', user.id, `User ${user.username} logged in successfully`);
+    return await sessionStore.run({ sess, req, res }, async () => {
+      // Logout
+      if (reqPath === '/logout.php') {
+        const u = currentUser();
+        if (u) logActivity('LOGOUT', 'users', u.id, `User ${u.username} logged out`);
+        const oldSid = sess.id;
+        revokedSids.add(oldSid);
+        sessions.delete(oldSid);
+        sess.id = crypto.randomBytes(16).toString('hex');
+        sess.userId = null;
+        sess.signedToken = null;
+        sess.tokenFallback = false;
+        sessions.set(sess.id, sess);
         saveState();
-        res.setHeader('Set-Cookie', buildSessionCookie(req, sess.id));
-        setFlash('success', `Welcome back, ${user.full_name}!`);
-        return redirect(res, '/dashboard.php');
+        clearCookie(req, res, SESSION_COOKIE, true);
+        setFlash('info', 'You have been successfully logged out.');
+        return redirect(res, '/login.php');
       }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(renderLoginPage());
-    }
+
+      // Login (always stays on login page on GET/refresh)
+      if (reqPath === '/login.php') {
+        if (req.method === 'POST') {
+          const body = await parseBody(req);
+          const username = (body.username || '').trim();
+          const password = body.password || '';
+          if (!username || !password) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end(renderLoginPage('Please enter both username and password.', username));
+          }
+          const user = state.users.find((u) => u.username === username);
+          if (!user || user.password !== password) {
+            logActivity('FAILED_LOGIN', 'users', null, `Failed login attempt for username: ${username}`);
+            saveState();
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end(renderLoginPage('Invalid username or password.', username));
+          }
+          if (user.status !== 'active') {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end(renderLoginPage('Your account has been deactivated. Please contact an administrator.', username));
+          }
+
+          // Regenerate session ID on login (prevents session fixation) and sign stateless token
+          const prevSid = sess.id;
+          sessions.delete(prevSid);
+          sess.id = crypto.randomBytes(16).toString('hex');
+          sess.userId = user.id;
+          sess.expiresAt = Date.now() + SESSION_TTL_MS;
+          sess.signedToken = signToken({ sid: sess.id, uid: user.id, exp: sess.expiresAt });
+
+          const reqCookies = parseCookies(req);
+          const browserAllowsCookies = !!(reqCookies[PROBE_COOKIE] || reqCookies[SESSION_COOKIE]);
+          sess.tokenFallback = !browserAllowsCookies;
+          sessions.set(sess.id, sess);
+
+          user.last_login = nowStr();
+          logActivity('LOGIN', 'users', user.id, `User ${user.username} logged in successfully`);
+          saveState();
+          queueCookie(res, buildCookieString(req, SESSION_COOKIE, sess.signedToken, { httpOnly: true }));
+          queueCookie(res, buildCookieString(req, PROBE_COOKIE, '1', { maxAgeSec: 86400, httpOnly: false }));
+          setFlash('success', `Welcome back, ${user.full_name}!`);
+          return redirect(res, '/dashboard.php');
+        }
+        queueCookie(res, buildCookieString(req, PROBE_COOKIE, '1', { maxAgeSec: 86400, httpOnly: false }));
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(renderLoginPage());
+      }
 
     // Root entry point: open system at login when unauthenticated, dashboard when logged in
     if (reqPath === '/' || reqPath === '/index.php' || reqPath === '/index.html') {
@@ -3045,7 +3292,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(html);
   }
-  if (reqPath === '/lost_items/process.php' && req.method === 'POST') {
+  if (reqPath === '/lost_items/process.php') {
+    if (req.method !== 'POST') {
+      return redirect(res, '/lost_items/index.php');
+    }
     const body = await parseBody(req);
     const action = body.action || '';
     if (action === 'create') {
@@ -3170,7 +3420,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(html);
   }
-  if (reqPath === '/found_items/process.php' && req.method === 'POST') {
+  if (reqPath === '/found_items/process.php') {
+    if (req.method !== 'POST') {
+      return redirect(res, '/found_items/index.php');
+    }
     const body = await parseBody(req);
     const action = body.action || '';
     if (action === 'create') {
@@ -3275,7 +3528,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(renderMatchesPage());
   }
-  if (reqPath === '/matches/process.php' && req.method === 'POST') {
+  if (reqPath === '/matches/process.php') {
+    if (req.method !== 'POST') {
+      return redirect(res, '/matches/index.php');
+    }
     const body = await parseBody(req);
     const action = body.action || '';
     if (action === 'create') {
@@ -3588,6 +3844,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, {
           'Content-Type': 'application/sql',
           'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Length': Buffer.byteLength(dump, 'utf8'),
         });
         return res.end(dump);
       }
@@ -3623,7 +3880,14 @@ const server = http.createServer(async (req, res) => {
 
     // Fallback to dashboard
     return redirect(res, '/dashboard.php');
-  });
+    });
+  } catch (err) {
+    console.error('Unhandled request error:', err);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Internal Server Error');
+    }
+  }
 });
 
 server.listen(PORT, HOST, () => {

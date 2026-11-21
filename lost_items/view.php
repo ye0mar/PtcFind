@@ -80,7 +80,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                     <a href="<?= base_url('lost_items/edit.php?id=' . $item['id']) ?>" class="btn btn-outline-primary btn-sm">
                         <i class="fa-solid fa-pen-to-square"></i> Edit
                     </a>
-                    <form method="POST" action="<?= base_url('lost_items/process.php') ?>" onsubmit="return confirm('Delete this lost item record?');">
+                    <form method="POST" action="<?= base_url('lost_items/process.php') ?>" data-confirm="Delete this lost item record?">
                         <?= csrf_field() ?>
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="id" value="<?= $item['id'] ?>">

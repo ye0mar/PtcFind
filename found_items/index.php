@@ -23,8 +23,12 @@ $where = [];
 $params = [];
 
 if (!empty($search)) {
-    $where[] = "(f.item_name LIKE :s OR f.description LIKE :s OR f.location_found LIKE :s OR f.storage_location LIKE :s)";
-    $params[':s'] = "%$search%";
+    $where[] = "(f.item_name LIKE :s1 OR f.description LIKE :s2 OR f.location_found LIKE :s3 OR f.storage_location LIKE :s4)";
+    $likeTerm = "%$search%";
+    $params[':s1'] = $likeTerm;
+    $params[':s2'] = $likeTerm;
+    $params[':s3'] = $likeTerm;
+    $params[':s4'] = $likeTerm;
 }
 
 if (!empty($categoryId) && is_numeric($categoryId)) {
@@ -205,7 +209,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                                                     <a href="<?= base_url('found_items/edit.php?id=' . $item['id']) ?>" class="btn btn-outline-primary btn-action-icon" title="Edit record">
                                                         <i class="fa-solid fa-pen-to-square"></i>
                                                     </a>
-                                                    <form method="POST" action="<?= base_url('found_items/process.php') ?>" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this found item record?');">
+                                                    <form method="POST" action="<?= base_url('found_items/process.php') ?>" class="d-inline" data-confirm="Are you sure you want to delete this found item record?">
                                                         <?= csrf_field() ?>
                                                         <input type="hidden" name="action" value="delete">
                                                         <input type="hidden" name="id" value="<?= $item['id'] ?>">

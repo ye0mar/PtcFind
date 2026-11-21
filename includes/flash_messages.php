@@ -51,8 +51,20 @@ function render_flash(): string {
         return '';
     }
 
-    $html = '<div class="flash-messages-container mb-4">';
+    $filtered = [];
     foreach ($messages as $msg) {
+        if ($msg['type'] === 'success' || $msg['type'] === 'info') {
+            continue;
+        }
+        $filtered[] = $msg;
+    }
+
+    if (empty($filtered)) {
+        return '';
+    }
+
+    $html = '<div class="flash-messages-container mb-4">';
+    foreach ($filtered as $msg) {
         $alertClass = 'alert-info';
         $iconClass = 'fa-circle-info';
 

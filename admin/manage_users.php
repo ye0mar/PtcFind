@@ -140,7 +140,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                                         <td class="ps-4">
                                             <div class="d-flex align-items-center gap-3">
                                                 <div class="user-avatar-circle" style="width: 38px; height: 38px; font-size: 0.95rem;">
-                                                    <?= strtoupper(substr($u['full_name'], 0, 1)) ?>
+                                                    <?= sanitize(function_exists('mb_substr') ? (mb_strtoupper(mb_substr($u['full_name'] ?: 'U', 0, 1, 'UTF-8'), 'UTF-8') ?: 'U') : (strtoupper(substr($u['full_name'] ?: 'U', 0, 1)) ?: 'U')) ?>
                                                 </div>
                                                 <div class="fw-semibold text-dark"><?= sanitize($u['full_name']) ?></div>
                                             </div>
@@ -174,7 +174,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                                                     </form>
 
                                                     <!-- Delete User -->
-                                                    <form method="POST" action="<?= base_url('admin/manage_users.php') ?>" class="d-inline" onsubmit="return confirm('Delete user @<?= sanitize($u['username']) ?>?');">
+                                                    <form method="POST" action="<?= base_url('admin/manage_users.php') ?>" class="d-inline" data-confirm="Delete user @<?= sanitize($u['username']) ?>?">
                                                         <?= csrf_field() ?>
                                                         <input type="hidden" name="action" value="delete_user">
                                                         <input type="hidden" name="user_id" value="<?= $u['id'] ?>">

@@ -104,7 +104,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                         <div class="card-body p-4 p-md-5">
                             <div class="d-flex align-items-center gap-3 mb-4">
                                 <div class="user-avatar-circle" style="width: 58px; height: 58px; font-size: 1.5rem; border-radius: 15px;">
-                                    <?= strtoupper(substr($userData['full_name'], 0, 1)) ?>
+                                    <?= sanitize(function_exists('mb_substr') ? (mb_strtoupper(mb_substr($userData['full_name'] ?: 'U', 0, 1, 'UTF-8'), 'UTF-8') ?: 'U') : (strtoupper(substr($userData['full_name'] ?: 'U', 0, 1)) ?: 'U')) ?>
                                 </div>
                                 <div>
                                     <h5 class="font-display fw-semibold text-dark mb-0"><?= sanitize($userData['full_name']) ?></h5>

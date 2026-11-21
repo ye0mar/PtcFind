@@ -5,6 +5,115 @@
  */
 
 document.addEventListener('DOMContentLoaded', function () {
+    // 0. Session Persistence Bridge (Seamless fallback when 3P iframe cookies are blocked)
+    const authMode = document.body.getAttribute('data-auth-mode') || '';
+    const bodyToken = document.body.getAttribute('data-session-token') || '';
+    const currentUrlObj = new URL(window.location.href);
+    const urlToken = currentUrlObj.searchParams.get('_st') || '';
+    let activeSessionToken = '';
+
+    if (authMode === 'token' || urlToken) {
+        activeSessionToken = bodyToken || urlToken || '';
+        if (activeSessionToken) {
+            try { sessionStorage.setItem('foundu_st', activeSessionToken); } catch (_) {}
+            if (!urlToken && window.history && window.history.replaceState) {
+                currentUrlObj.searchParams.set('_st', activeSessionToken);
+                window.history.replaceState({}, '', currentUrlObj.pathname + currentUrlObj.search + currentUrlObj.hash);
+            }
+        }
+    } else if (!document.body.getAttribute('data-user-id')) {
+        try { sessionStorage.removeItem('foundu_st'); } catch (_) {}
+    } else {
+        try {
+            const stored = sessionStorage.getItem('foundu_st') || '';
+            if (authMode === 'cookie' && stored) {
+                sessionStorage.removeItem('foundu_st');
+            }
+        } catch (_) {}
+    }
+
+    function appendSessionToken(rawUrl) {
+        if (!activeSessionToken || !rawUrl) return rawUrl;
+        const s = String(rawUrl).trim();
+        if (!s || s.startsWith('#') || s.startsWith('javascript:') || s.startsWith('mailto:') || s.startsWith('tel:')) {
+            return rawUrl;
+        }
+        try {
+            const u = new URL(s, window.location.origin);
+            if (u.origin !== window.location.origin) return rawUrl;
+            if (u.pathname.endsWith('/logout.php') || u.pathname === '/logout.php' || u.pathname.endsWith('/login.php')) {
+                return rawUrl;
+            }
+            if (!u.searchParams.has('_st')) {
+                u.searchParams.set('_st', activeSessionToken);
+            }
+            return u.pathname + u.search + u.hash;
+        } catch (_) {
+            return rawUrl;
+        }
+    }
+
+    function applySessionTokenToDom(root) {
+        if (!activeSessionToken || !root) return;
+        root.querySelectorAll('a[href]').forEach(function (link) {
+            const raw = link.getAttribute('href');
+            const updated = appendSessionToken(raw);
+            if (updated !== raw) link.setAttribute('href', updated);
+        });
+        root.querySelectorAll('form').forEach(function (form) {
+            const rawAction = form.getAttribute('action') || window.location.pathname;
+            const method = (form.getAttribute('method') || 'GET').toUpperCase();
+            if (method === 'POST') {
+                form.setAttribute('action', appendSessionToken(rawAction));
+            } else {
+                let hidden = form.querySelector('input[type="hidden"][name="_st"]');
+                if (!hidden) {
+                    hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = '_st';
+                    form.appendChild(hidden);
+                }
+                hidden.value = activeSessionToken;
+            }
+        });
+    }
+
+    if (activeSessionToken) {
+        applySessionTokenToDom(document);
+        document.addEventListener('click', function (e) {
+            const link = e.target.closest('a[href]');
+            if (!link) return;
+            const raw = link.getAttribute('href') || '';
+            if (raw.includes('logout.php')) {
+                try { sessionStorage.removeItem('foundu_st'); } catch (_) {}
+                return;
+            }
+            const updated = appendSessionToken(raw);
+            if (updated !== raw) {
+                link.setAttribute('href', updated);
+            }
+        }, true);
+        document.addEventListener('submit', function (e) {
+            const form = e.target;
+            if (!form || !form.getAttribute) return;
+            const rawAction = form.getAttribute('action') || window.location.pathname;
+            const method = (form.getAttribute('method') || 'GET').toUpperCase();
+            if (method === 'POST') {
+                const updatedAction = appendSessionToken(rawAction);
+                if (updatedAction !== rawAction) form.setAttribute('action', updatedAction);
+            } else {
+                let hidden = form.querySelector('input[type="hidden"][name="_st"]');
+                if (!hidden) {
+                    hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = '_st';
+                    form.appendChild(hidden);
+                }
+                hidden.value = activeSessionToken;
+            }
+        }, true);
+    }
+
     // 1. Bootstrap 5 Form Validation
     const forms = document.querySelectorAll('.needs-validation');
     Array.from(forms).forEach(function (form) {
@@ -241,14 +350,22 @@ document.addEventListener('DOMContentLoaded', function () {
             if (p > 1) {
                 requestUrl.searchParams.set('page', String(p));
             }
+            if (activeSessionToken) {
+                requestUrl.searchParams.set('_st', activeSessionToken);
+            }
+
+            const fetchHeaders = {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            };
+            if (activeSessionToken) {
+                fetchHeaders['X-FoundU-Token'] = activeSessionToken;
+            }
 
             fetch(requestUrl.toString(), {
                 method: 'GET',
                 signal: controller.signal,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'application/json'
-                }
+                headers: fetchHeaders
             })
                 .then(function (response) {
                     if (!response.ok) {
@@ -266,6 +383,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     resultsEl.innerHTML = data.html;
+                    applySessionTokenToDom(resultsEl);
                     lastFetchedKey = q + '|' + (data.page || p);
 
                     const cleanUrl = new URL(baseAction, window.location.origin);
@@ -274,6 +392,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                     if ((data.page || p) > 1) {
                         cleanUrl.searchParams.set('page', String(data.page || p));
+                    }
+                    if (activeSessionToken) {
+                        cleanUrl.searchParams.set('_st', activeSessionToken);
                     }
                     if (window.history && window.history.replaceState) {
                         window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search);
@@ -348,8 +469,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // 8. Logout Confirmation Modal
+    // 8. Logout Confirmation Modal & Generic Action Confirmation Modal
     const logoutModalEl = document.getElementById('logoutConfirmModal');
+    const confirmLogoutLink = document.getElementById('confirmLogoutLink');
+    if (confirmLogoutLink) {
+        confirmLogoutLink.addEventListener('click', function () {
+            try { sessionStorage.removeItem('foundu_st'); } catch (_) {}
+        });
+    }
     document.addEventListener('click', function (e) {
         const logoutBtn = e.target.closest('[data-logout-trigger]');
         if (!logoutBtn) return;
@@ -357,7 +484,45 @@ document.addEventListener('DOMContentLoaded', function () {
         if (logoutModalEl && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
             bootstrap.Modal.getOrCreateInstance(logoutModalEl).show();
         } else {
-            window.location.href = 'logout.php';
+            try { sessionStorage.removeItem('foundu_st'); } catch (_) {}
+            window.location.href = (confirmLogoutLink && confirmLogoutLink.getAttribute('href')) || '/logout.php';
+        }
+    });
+
+    const confirmActionModalEl = document.getElementById('confirmActionModal');
+    const confirmActionMessageEl = document.getElementById('confirmActionModalMessage');
+    const confirmActionProceedBtn = document.getElementById('confirmActionProceedBtn');
+    let pendingConfirmForm = null;
+
+    if (confirmActionProceedBtn) {
+        confirmActionProceedBtn.addEventListener('click', function () {
+            const formToSubmit = pendingConfirmForm;
+            pendingConfirmForm = null;
+            if (confirmActionModalEl && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                bootstrap.Modal.getOrCreateInstance(confirmActionModalEl).hide();
+            }
+            if (formToSubmit) {
+                formToSubmit.dataset.confirmedSubmit = '1';
+                formToSubmit.submit();
+            }
+        });
+    }
+
+    document.addEventListener('submit', function (e) {
+        const form = e.target;
+        if (!form || !form.getAttribute) return;
+        const msg = form.getAttribute('data-confirm');
+        if (!msg || form.dataset.confirmedSubmit === '1') {
+            return;
+        }
+        e.preventDefault();
+        pendingConfirmForm = form;
+        if (confirmActionModalEl && confirmActionMessageEl && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+            confirmActionMessageEl.textContent = msg;
+            bootstrap.Modal.getOrCreateInstance(confirmActionModalEl).show();
+        } else {
+            form.dataset.confirmedSubmit = '1';
+            form.submit();
         }
     });
 
@@ -423,7 +588,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 '<span class="badge ' + roleClass + '">' + escapeHtml(String(notif.sender_role || '').toUpperCase()) + '</span>' +
                             '</div>' +
                             '<div class="small text-secondary mb-2">' + escapeHtml(notif.message) + '</div>' +
-                            '<a href="' + escapeHtml(notif.open_url) + '" class="btn btn-soft-primary btn-sm py-1 px-2">' +
+                            '<a href="' + escapeHtml(appendSessionToken(notif.open_url)) + '" class="btn btn-soft-primary btn-sm px-2">' +
                                 '<i class="fa-solid fa-eye"></i> View ' + escapeHtml(notif.related_item_label) +
                             '</a>' +
                         '</div>' +
@@ -477,9 +642,9 @@ document.addEventListener('DOMContentLoaded', function () {
                             '</div>' +
                         '</div>' +
                         '<div class="d-flex flex-wrap align-items-center gap-2 flex-shrink-0">' +
-                            '<a href="' + escapeHtml(notif.open_url) + '" class="btn btn-soft-primary btn-sm px-3"><i class="fa-solid fa-eye"></i><span>View Item</span></a>' +
+                            '<a href="' + escapeHtml(appendSessionToken(notif.open_url)) + '" class="btn btn-soft-primary btn-sm px-3"><i class="fa-solid fa-eye"></i><span>View Item</span></a>' +
                             (!isRead
-                                ? '<form method="POST" action="' + escapeHtml(window.location.pathname) + '" class="d-inline" data-mark-read-form>' +
+                                ? '<form method="POST" action="' + escapeHtml(appendSessionToken(window.location.pathname)) + '" class="d-inline" data-mark-read-form>' +
                                     (csrfToken ? '<input type="hidden" name="csrf_token" value="' + escapeHtml(csrfToken) + '">' : '') +
                                     '<input type="hidden" name="action" value="mark_read">' +
                                     '<input type="hidden" name="notification_id" value="' + Number(notif.id) + '">' +
@@ -505,13 +670,21 @@ document.addEventListener('DOMContentLoaded', function () {
             if (notificationsPageEl) {
                 pollUrl.searchParams.set('include_list', '1');
             }
+            if (activeSessionToken) {
+                pollUrl.searchParams.set('_st', activeSessionToken);
+            }
+
+            const pollHeaders = {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            };
+            if (activeSessionToken) {
+                pollHeaders['X-FoundU-Token'] = activeSessionToken;
+            }
 
             fetch(pollUrl.toString(), {
                 method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
+                headers: pollHeaders
             })
                 .then(function (res) {
                     if (!res.ok) return null;
@@ -560,14 +733,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 formData.set(key, String(params[key]));
             });
 
-            return fetch(notificationsApiUrl, {
+            const postUrl = appendSessionToken(notificationsApiUrl);
+            const postHeaders = {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-Token': csrfToken
+            };
+            if (activeSessionToken) {
+                postHeaders['X-FoundU-Token'] = activeSessionToken;
+            }
+
+            return fetch(postUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'X-CSRF-Token': csrfToken
-                },
+                headers: postHeaders,
                 body: formData.toString()
             }).then(function (res) {
                 if (!res.ok) throw new Error('Request failed');

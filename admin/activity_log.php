@@ -17,8 +17,13 @@ $where = [];
 $params = [];
 
 if (!empty($search)) {
-    $where[] = "(a.action LIKE :s OR a.details LIKE :s OR u.username LIKE :s OR u.full_name LIKE :s OR a.ip_address LIKE :s)";
-    $params[':s'] = "%$search%";
+    $where[] = "(a.action LIKE :s1 OR a.details LIKE :s2 OR u.username LIKE :s3 OR u.full_name LIKE :s4 OR a.ip_address LIKE :s5)";
+    $likeTerm = "%$search%";
+    $params[':s1'] = $likeTerm;
+    $params[':s2'] = $likeTerm;
+    $params[':s3'] = $likeTerm;
+    $params[':s4'] = $likeTerm;
+    $params[':s5'] = $likeTerm;
 }
 
 $whereClause = !empty($where) ? 'WHERE ' . implode(' AND ', $where) : '';

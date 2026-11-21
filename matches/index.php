@@ -146,7 +146,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                                                         <span class="badge status-badge-claimed">RETURNED</span>
                                                     <?php endif; ?>
 
-                                                    <form method="POST" action="<?= base_url('matches/process.php') ?>" class="d-inline" onsubmit="return confirm('Unlink this match? Items will return to open/available status.');">
+                                                    <form method="POST" action="<?= base_url('matches/process.php') ?>" class="d-inline" data-confirm="Unlink this match? Items will return to open/available status.">
                                                         <?= csrf_field() ?>
                                                         <input type="hidden" name="action" value="delete">
                                                         <input type="hidden" name="match_id" value="<?= $m['id'] ?>">

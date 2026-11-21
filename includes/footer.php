@@ -40,6 +40,28 @@
             </div>
         </div>
 
+        <!-- Generic Action Confirmation Modal -->
+        <div class="modal fade" id="confirmActionModal" tabindex="-1" aria-labelledby="confirmActionModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-sm">
+                <div class="modal-content border-0 shadow rounded-4">
+                    <div class="modal-header border-0 pb-1">
+                        <h5 class="modal-title font-display fw-semibold text-dark d-flex align-items-center gap-2" id="confirmActionModalLabel">
+                            <i class="fa-solid fa-triangle-exclamation text-danger"></i>
+                            <span>Confirm Action</span>
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body py-2">
+                        <p class="small text-muted mb-0" id="confirmActionModalMessage">Are you sure you want to proceed?</p>
+                    </div>
+                    <div class="modal-footer border-0 pt-2">
+                        <button type="button" class="btn btn-secondary btn-sm px-3" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-danger btn-sm px-3" id="confirmActionProceedBtn">Confirm</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Real-Time Notification Toast Container -->
         <div id="notificationToastContainer" class="notification-toast-container" aria-live="polite" aria-atomic="true"></div>
     <?php endif; ?>
