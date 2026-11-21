@@ -58,8 +58,6 @@ function current_user(): ?array {
  */
 function require_login(): void {
     if (!is_logged_in()) {
-        require_once __DIR__ . '/flash_messages.php';
-        set_flash('error', 'Please log in to access this page.');
         header('Location: ' . base_url('login.php'));
         exit;
     }

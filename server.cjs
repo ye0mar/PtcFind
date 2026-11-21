@@ -3255,7 +3255,6 @@ const server = http.createServer(async (req, res) => {
 
     // Require login for app routes
     if (!currentUser()) {
-      setFlash('error', 'Please log in to access this page.');
       return redirect(res, '/login.php');
     }
 
