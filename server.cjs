@@ -499,13 +499,20 @@ function renderFlash() {
   }
   if (!sess || !sess.flash.length) return '';
   const items = sess.flash.splice(0, sess.flash.length);
-  const filtered = items.filter((msg) => msg.type !== 'success' && msg.type !== 'info');
+  const filtered = items.filter((msg) => {
+    const text = String(msg.message || '').toLowerCase();
+    if (text.startsWith('welcome back') || text.includes('successfully logged out')) {
+      return false;
+    }
+    return true;
+  });
   if (!filtered.length) return '';
   let html = '<div class="flash-messages-container mb-4">';
   for (const msg of filtered) {
     let alertClass = 'alert-info';
     let iconClass = 'fa-circle-info';
-    if (msg.type === 'error' || msg.type === 'danger') { alertClass = 'alert-danger'; iconClass = 'fa-triangle-exclamation'; }
+    if (msg.type === 'success') { alertClass = 'alert-success'; iconClass = 'fa-circle-check'; }
+    else if (msg.type === 'error' || msg.type === 'danger') { alertClass = 'alert-danger'; iconClass = 'fa-triangle-exclamation'; }
     else if (msg.type === 'warning') { alertClass = 'alert-warning'; iconClass = 'fa-circle-exclamation'; }
     html += `<div class="alert ${alertClass} alert-dismissible fade show d-flex align-items-center" role="alert">
       <i class="fa-solid ${iconClass} me-2 fs-5"></i>

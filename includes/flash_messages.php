@@ -53,7 +53,8 @@ function render_flash(): string {
 
     $filtered = [];
     foreach ($messages as $msg) {
-        if ($msg['type'] === 'success' || $msg['type'] === 'info') {
+        $text = strtolower($msg['message'] ?? '');
+        if (str_starts_with($text, 'welcome back') || str_contains($text, 'successfully logged out')) {
             continue;
         }
         $filtered[] = $msg;
