@@ -3468,7 +3468,7 @@ const server = http.createServer(async (req, res) => {
       logActivity('CREATE_FOUND_ITEM', 'found_items', newItem.id, `Recorded found item: ${itemName} (Storage: ${storageLocation})`);
       saveState();
       setFlash('success', `Found item '${itemName}' recorded into storage.`);
-      return redirect(res, `/found_items/view.php?id=${newItem.id}`);
+      return redirect(res, '/found_items/index.php');
     }
     if (action === 'update') {
       const id = Number(body.id || 0);

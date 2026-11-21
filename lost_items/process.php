@@ -67,7 +67,7 @@ switch ($action) {
 
             log_activity('CREATE_LOST_ITEM', 'lost_items', $newId, "Reported lost item: {$itemName}");
             set_flash('success', "Lost item '{$itemName}' recorded successfully.");
-            header('Location: ' . base_url('lost_items/view.php?id=' . $newId));
+            header('Location: ' . base_url('lost_items/index.php'));
             exit;
         } catch (Exception $e) {
             if ($pdo->inTransaction()) {

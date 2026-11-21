@@ -68,7 +68,7 @@ switch ($action) {
 
             log_activity('CREATE_FOUND_ITEM', 'found_items', $newId, "Recorded found item: {$itemName} (Storage: {$storageLocation})");
             set_flash('success', "Found item '{$itemName}' recorded into storage.");
-            header('Location: ' . base_url('found_items/view.php?id=' . $newId));
+            header('Location: ' . base_url('found_items/index.php'));
             exit;
         } catch (Exception $e) {
             if ($pdo->inTransaction()) {
