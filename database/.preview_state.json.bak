@@ -1,0 +1,327 @@
+{
+  "settings": {
+    "system_name": "Lost & Found Management System",
+    "organization_name": "Pateros Technological College",
+    "items_per_page": "15"
+  },
+  "users": [
+    {
+      "id": 1,
+      "full_name": "System Administrator",
+      "username": "admin",
+      "email": "admin@foundu.edu",
+      "role": "admin",
+      "status": "active",
+      "last_login": "2026-11-22 04:17:56",
+      "created_at": "2026-11-01 08:00:00",
+      "password_hash": "scrypt:e4585a421949f160684bb9a61796b754:24a928d250696a4970d479872ce6db8276aba792116e257bb2410a64c3aceedb97fc8afebcb477c234caeb3ba08bf45ae24e318208edf6e76f001b0811b1d37d"
+    },
+    {
+      "id": 2,
+      "full_name": "Campus Staff Officer",
+      "username": "staff",
+      "email": "staff@foundu.edu",
+      "role": "staff",
+      "status": "active",
+      "last_login": "2026-11-22 04:17:56",
+      "created_at": "2026-11-02 09:00:00",
+      "password_hash": "scrypt:3a2ac91e1c7517284314585df4e860b4:680e4961ca70a8598e3a0757da49b7084bf948fac331c3f7cb6fbd4f829c480d0cdf7a4a32180ada1c2e56f274a1e4e7b0b993d2ac1f34f9ccca9c96e7aeeb99"
+    }
+  ],
+  "lostItems": [
+    {
+      "id": 1,
+      "item_name": "MacBook Pro 14\"",
+      "category_id": 1,
+      "description": "Space Gray, sticker of campus tech club on back lid",
+      "date_lost": "2026-11-15",
+      "location_lost": "Main Library - 2nd Floor",
+      "contact_info": "john.student@foundu.edu",
+      "image_path": null,
+      "status": "open",
+      "reported_by": 1,
+      "created_at": "2026-11-15 10:20:00",
+      "updated_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 2,
+      "item_name": "Brown Leather Bi-fold Wallet",
+      "category_id": 2,
+      "description": "Contains student ID and transit card",
+      "date_lost": "2026-11-16",
+      "location_lost": "University Cafeteria",
+      "contact_info": "sarah.k@foundu.edu",
+      "image_path": null,
+      "status": "open",
+      "reported_by": 1,
+      "created_at": "2026-11-16 13:45:00",
+      "updated_at": null
+    }
+  ],
+  "foundItems": [
+    {
+      "id": 1,
+      "item_name": "Apple Laptop (MacBook)",
+      "category_id": 1,
+      "description": "Space Gray MacBook found in library study lounge 4",
+      "date_found": "2026-11-15",
+      "location_found": "Library 2nd Floor",
+      "storage_location": "Security Locker #12",
+      "notes": "Turned in by student assistant",
+      "image_path": null,
+      "status": "available",
+      "recorded_by": 1,
+      "created_at": "2026-11-15 11:05:00",
+      "updated_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 2,
+      "item_name": "Blue Hydro Flask Bottle",
+      "category_id": 10,
+      "description": "32oz water bottle with mountain climbing stickers",
+      "date_found": "2026-11-17",
+      "location_found": "Gymnasium Bleachers",
+      "storage_location": "Storage Bin A-3",
+      "notes": "Cleaned and safely stored",
+      "image_path": null,
+      "status": "available",
+      "recorded_by": 1,
+      "created_at": "2026-11-17 16:10:00",
+      "updated_at": "2026-11-22 04:17:56"
+    }
+  ],
+  "matches": [],
+  "returnedItems": [
+    {
+      "id": 4,
+      "lost_item_id": null,
+      "found_item_id": null,
+      "match_id": null,
+      "item_name": "E2E Scientific Calculator",
+      "category_id": 1,
+      "description": "Casio fx-991EX",
+      "item_image_path": null,
+      "receiver_name": "Ana Reyes",
+      "receiver_contact": "09180001111",
+      "date_returned": "2026-11-22",
+      "proof_image_path": "uploads/item_1795321076854_faf9a21fb4fc.png",
+      "notes": "ID verified",
+      "recorded_by": 1,
+      "created_at": "2026-11-22 04:17:56"
+    }
+  ],
+  "activityLogs": [
+    {
+      "id": 15,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 5,
+      "details": "Deleted returned item record #5",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 14,
+      "user_id": 2,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 5,
+      "details": "Recorded return of 'Blue Hydro Flask Bottle' to Carlo Mendoza",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 13,
+      "user_id": 2,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 2,
+      "details": "User staff logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 12,
+      "user_id": 1,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 4,
+      "details": "Recorded return of 'E2E Scientific Calculator' to Ana Reyes",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 11,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 1,
+      "details": "Deleted returned item record #1",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 10,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 2,
+      "details": "Deleted returned item record #2",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 9,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 3,
+      "details": "Deleted returned item record #3",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 8,
+      "user_id": 1,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 1,
+      "details": "User admin logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 7,
+      "user_id": 2,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 3,
+      "details": "Recorded return of 'Walk-in Umbrella' to Maria Santos",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:56"
+    },
+    {
+      "id": 6,
+      "user_id": 2,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 2,
+      "details": "Recorded return of 'Apple Laptop (MacBook)' to John Student",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:56"
+    },
+    {
+      "id": 5,
+      "user_id": 2,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 2,
+      "details": "User staff logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:55"
+    },
+    {
+      "id": 4,
+      "user_id": 1,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 1,
+      "details": "Recorded return of 'Test Laptop' to Juan Dela Cruz",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:06"
+    },
+    {
+      "id": 3,
+      "user_id": 1,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 1,
+      "details": "User admin logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:06"
+    },
+    {
+      "id": 2,
+      "user_id": null,
+      "action": "FAILED_LOGIN",
+      "target_type": "users",
+      "target_id": null,
+      "details": "Failed login attempt for username: admin",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:11:43"
+    },
+    {
+      "id": 1,
+      "user_id": 1,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 1,
+      "details": "User admin logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-18 09:30:00"
+    }
+  ],
+  "backupLogs": [],
+  "notifications": [
+    {
+      "id": 4,
+      "recipient_user_id": 2,
+      "sender_user_id": 1,
+      "sender_role": "admin",
+      "related_item_id": 4,
+      "related_item_type": "returned_item",
+      "title": "Item Returned",
+      "message": "System Administrator recorded a returned item handover.",
+      "is_read": 0,
+      "read_at": null,
+      "created_at": "2026-11-22 04:17:56"
+    }
+  ],
+  "nextIds": {
+    "lost": 3,
+    "found": 3,
+    "match": 1,
+    "returned": 6,
+    "user": 3,
+    "log": 16,
+    "backup": 1,
+    "notification": 6
+  },
+  "sessions": {
+    "c31a52e2e06be2d6835f57a50636cf64": {
+      "userId": 2,
+      "flash": [],
+      "expiresAt": 1795831087261
+    },
+    "fc6c89b1b4b87dfa1c5c89b0b66dab22": {
+      "userId": 1,
+      "flash": [],
+      "expiresAt": 1795925526441
+    },
+    "5896f2be172565fc02a24a116f457f68": {
+      "userId": 2,
+      "flash": [],
+      "expiresAt": 1795925576008
+    },
+    "c99ca2c41abaf31732f842de211a2d29": {
+      "userId": 1,
+      "flash": [
+        {
+          "type": "success",
+          "message": "Welcome back, System Administrator!"
+        },
+        {
+          "type": "error",
+          "message": "Unsupported image format. Allowed formats: JPG, JPEG, PNG, WEBP (Max 5MB)."
+        }
+      ],
+      "expiresAt": 1795925876973
+    },
+    "43679a0117ff2ccd183b089fc09eee6d": {
+      "userId": 2,
+      "flash": [],
+      "expiresAt": 1795925876948
+    }
+  }
+}

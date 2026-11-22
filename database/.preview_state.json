@@ -10,22 +10,22 @@
       "full_name": "System Administrator",
       "username": "admin",
       "email": "admin@foundu.edu",
-      "password": "admin123",
       "role": "admin",
       "status": "active",
-      "last_login": "2026-11-18 09:30:00",
-      "created_at": "2026-11-01 08:00:00"
+      "last_login": "2026-11-22 04:17:56",
+      "created_at": "2026-11-01 08:00:00",
+      "password_hash": "scrypt:e4585a421949f160684bb9a61796b754:24a928d250696a4970d479872ce6db8276aba792116e257bb2410a64c3aceedb97fc8afebcb477c234caeb3ba08bf45ae24e318208edf6e76f001b0811b1d37d"
     },
     {
       "id": 2,
       "full_name": "Campus Staff Officer",
       "username": "staff",
       "email": "staff@foundu.edu",
-      "password": "staff123",
       "role": "staff",
       "status": "active",
-      "last_login": "2026-11-17 14:15:00",
-      "created_at": "2026-11-02 09:00:00"
+      "last_login": "2026-11-22 04:17:56",
+      "created_at": "2026-11-02 09:00:00",
+      "password_hash": "scrypt:3a2ac91e1c7517284314585df4e860b4:680e4961ca70a8598e3a0757da49b7084bf948fac331c3f7cb6fbd4f829c480d0cdf7a4a32180ada1c2e56f274a1e4e7b0b993d2ac1f34f9ccca9c96e7aeeb99"
     }
   ],
   "lostItems": [
@@ -41,7 +41,7 @@
       "status": "open",
       "reported_by": 1,
       "created_at": "2026-11-15 10:20:00",
-      "updated_at": null
+      "updated_at": "2026-11-22 04:17:56"
     },
     {
       "id": 2,
@@ -72,7 +72,7 @@
       "status": "available",
       "recorded_by": 1,
       "created_at": "2026-11-15 11:05:00",
-      "updated_at": null
+      "updated_at": "2026-11-22 04:17:56"
     },
     {
       "id": 2,
@@ -87,12 +87,162 @@
       "status": "available",
       "recorded_by": 1,
       "created_at": "2026-11-17 16:10:00",
-      "updated_at": null
+      "updated_at": "2026-11-22 04:17:56"
     }
   ],
   "matches": [],
   "returnedItems": [],
   "activityLogs": [
+    {
+      "id": 16,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 4,
+      "details": "Deleted returned item record #4",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 15,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 5,
+      "details": "Deleted returned item record #5",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 14,
+      "user_id": 2,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 5,
+      "details": "Recorded return of 'Blue Hydro Flask Bottle' to Carlo Mendoza",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 13,
+      "user_id": 2,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 2,
+      "details": "User staff logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 12,
+      "user_id": 1,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 4,
+      "details": "Recorded return of 'E2E Scientific Calculator' to Ana Reyes",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 11,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 1,
+      "details": "Deleted returned item record #1",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 10,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 2,
+      "details": "Deleted returned item record #2",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 9,
+      "user_id": 1,
+      "action": "DELETE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 3,
+      "details": "Deleted returned item record #3",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 8,
+      "user_id": 1,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 1,
+      "details": "User admin logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:17:56"
+    },
+    {
+      "id": 7,
+      "user_id": 2,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 3,
+      "details": "Recorded return of 'Walk-in Umbrella' to Maria Santos",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:56"
+    },
+    {
+      "id": 6,
+      "user_id": 2,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 2,
+      "details": "Recorded return of 'Apple Laptop (MacBook)' to John Student",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:56"
+    },
+    {
+      "id": 5,
+      "user_id": 2,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 2,
+      "details": "User staff logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:55"
+    },
+    {
+      "id": 4,
+      "user_id": 1,
+      "action": "CREATE_RETURNED_ITEM",
+      "target_type": "returned_items",
+      "target_id": 1,
+      "details": "Recorded return of 'Test Laptop' to Juan Dela Cruz",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:06"
+    },
+    {
+      "id": 3,
+      "user_id": 1,
+      "action": "LOGIN",
+      "target_type": "users",
+      "target_id": 1,
+      "details": "User admin logged in successfully",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:12:06"
+    },
+    {
+      "id": 2,
+      "user_id": null,
+      "action": "FAILED_LOGIN",
+      "target_type": "users",
+      "target_id": null,
+      "details": "Failed login attempt for username: admin",
+      "ip_address": "127.0.0.1",
+      "created_at": "2026-11-22 04:11:43"
+    },
     {
       "id": 1,
       "user_id": 1,
@@ -110,11 +260,50 @@
     "lost": 3,
     "found": 3,
     "match": 1,
-    "returned": 1,
+    "returned": 6,
     "user": 3,
-    "log": 2,
+    "log": 17,
     "backup": 1,
-    "notification": 1
+    "notification": 6
   },
-  "sessions": {}
+  "sessions": {
+    "c31a52e2e06be2d6835f57a50636cf64": {
+      "userId": 2,
+      "flash": [],
+      "expiresAt": 1795831087261
+    },
+    "fc6c89b1b4b87dfa1c5c89b0b66dab22": {
+      "userId": 1,
+      "flash": [],
+      "expiresAt": 1795925526441
+    },
+    "5896f2be172565fc02a24a116f457f68": {
+      "userId": 2,
+      "flash": [],
+      "expiresAt": 1795925576008
+    },
+    "c99ca2c41abaf31732f842de211a2d29": {
+      "userId": 1,
+      "flash": [
+        {
+          "type": "success",
+          "message": "Welcome back, System Administrator!"
+        },
+        {
+          "type": "error",
+          "message": "Unsupported image format. Allowed formats: JPG, JPEG, PNG, WEBP (Max 5MB)."
+        },
+        {
+          "type": "success",
+          "message": "Returned item record deleted."
+        }
+      ],
+      "expiresAt": 1795925876978
+    },
+    "43679a0117ff2ccd183b089fc09eee6d": {
+      "userId": 2,
+      "flash": [],
+      "expiresAt": 1795925876948
+    }
+  }
 }

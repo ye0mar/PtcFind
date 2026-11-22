@@ -624,8 +624,8 @@ function renderFlash() {
   return html;
 }
 
-function logActivity(action, targetType, targetId, details) {
-  const u = currentUser();
+function logActivity(action, targetType, targetId, details, userOverride = null) {
+  const u = userOverride || currentUser();
   state.activityLogs.unshift({
     id: state.nextIds.log++,
     user_id: u ? u.id : null,
@@ -776,54 +776,69 @@ function redirect(res, location) {
 function parseMultipart(buf, boundary) {
   const fields = {};
   const files = {};
-  const delim = Buffer.from('--' + boundary);
-  const headerSep = Buffer.from('\r\n\r\n');
-  let pos = buf.indexOf(delim);
+  try {
+    const delim = Buffer.from('--' + boundary);
+    const crlfSep = Buffer.from('\r\n\r\n');
+    const lfSep = Buffer.from('\n\n');
+    let pos = buf.indexOf(delim);
 
-  while (pos !== -1) {
-    let start = pos + delim.length;
-    if (buf[start] === 0x2d && buf[start + 1] === 0x2d) {
-      break; // closing boundary '--'
-    }
-    if (buf[start] === 0x0d && buf[start + 1] === 0x0a) {
-      start += 2;
-    }
-    const nextPos = buf.indexOf(delim, start);
-    if (nextPos === -1) break;
+    while (pos !== -1) {
+      let start = pos + delim.length;
+      if (buf[start] === 0x2d && buf[start + 1] === 0x2d) {
+        break; // closing boundary '--'
+      }
+      if (buf[start] === 0x0d && buf[start + 1] === 0x0a) {
+        start += 2;
+      } else if (buf[start] === 0x0a) {
+        start += 1;
+      }
+      const nextPos = buf.indexOf(delim, start);
+      if (nextPos === -1) break;
 
-    let partBuf = buf.slice(start, nextPos);
-    if (partBuf.length >= 2 && partBuf[partBuf.length - 2] === 0x0d && partBuf[partBuf.length - 1] === 0x0a) {
-      partBuf = partBuf.slice(0, partBuf.length - 2);
-    }
+      let partBuf = buf.slice(start, nextPos);
+      if (partBuf.length >= 2 && partBuf[partBuf.length - 2] === 0x0d && partBuf[partBuf.length - 1] === 0x0a) {
+        partBuf = partBuf.slice(0, partBuf.length - 2);
+      } else if (partBuf.length >= 1 && partBuf[partBuf.length - 1] === 0x0a) {
+        partBuf = partBuf.slice(0, partBuf.length - 1);
+      }
 
-    const sepIdx = partBuf.indexOf(headerSep);
-    if (sepIdx !== -1) {
-      const headerText = partBuf.slice(0, sepIdx).toString('utf8');
-      const bodyBuf = partBuf.slice(sepIdx + 4);
-      const nameMatch = headerText.match(/name="([^"]+)"/i);
-      const fileMatch = headerText.match(/filename="([^"]*)"/i);
-      const typeMatch = headerText.match(/Content-Type:\s*([^\r\n;]+)/i);
+      let sepIdx = partBuf.indexOf(crlfSep);
+      let sepLen = 4;
+      if (sepIdx === -1) {
+        sepIdx = partBuf.indexOf(lfSep);
+        sepLen = 2;
+      }
+      if (sepIdx !== -1) {
+        const headerText = partBuf.slice(0, sepIdx).toString('utf8');
+        const bodyBuf = partBuf.slice(sepIdx + sepLen);
+        const nameMatch = headerText.match(/(?:^|[;\s])name="([^"]+)"/i) || headerText.match(/(?:^|[;\s])name='([^']+)'/i);
+        const fileMatch = headerText.match(/(?:^|[;\s])filename="([^"]*)"/i) || headerText.match(/(?:^|[;\s])filename='([^']*)'/i);
+        const typeMatch = headerText.match(/Content-Type:\s*([^\r\n;]+)/i);
 
-      if (nameMatch) {
-        const fieldName = nameMatch[1];
-        if (!fileMatch) {
-          fields[fieldName] = bodyBuf.toString('utf8');
-        } else {
-          const filename = fileMatch[1] || '';
-          const contentType = typeMatch ? typeMatch[1].trim().toLowerCase() : '';
-          if (filename !== '' || bodyBuf.length > 0) {
-            files[fieldName] = {
-              filename,
-              contentType,
-              buffer: bodyBuf,
-              size: bodyBuf.length,
-            };
+        if (nameMatch) {
+          const fieldName = nameMatch[1];
+          if (!fileMatch) {
+            fields[fieldName] = bodyBuf.toString('utf8');
+          } else {
+            const filename = path.basename((fileMatch[1] || '').replace(/\\/g, '/'));
+            const contentType = typeMatch ? typeMatch[1].trim().toLowerCase() : '';
+            if (filename !== '' || bodyBuf.length > 0) {
+              files[fieldName] = {
+                filename,
+                contentType,
+                buffer: bodyBuf,
+                size: bodyBuf.length,
+              };
+            }
           }
         }
       }
-    }
 
-    pos = nextPos;
+      pos = nextPos;
+    }
+  } catch (err) {
+    console.error('Multipart parse error:', err.message);
+    fields._parseError = true;
   }
 
   fields._files = files;
@@ -832,9 +847,10 @@ function parseMultipart(buf, boundary) {
 
 function parseBody(req) {
   return new Promise((resolve) => {
-    const MAX_BODY_BYTES = 10 * 1024 * 1024;
+    const MAX_BODY_BYTES = 16 * 1024 * 1024;
     const chunks = [];
     let totalBytes = 0;
+    let tooLarge = false;
     let settled = false;
 
     const finish = (val) => {
@@ -846,28 +862,40 @@ function parseBody(req) {
     req.on('data', (chunk) => {
       totalBytes += chunk.length;
       if (totalBytes > MAX_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0; // free memory while draining remaining payload
+        return;
+      }
+      if (!tooLarge) {
+        chunks.push(chunk);
+      }
+    });
+    req.on('error', () => finish({ _files: {}, _readError: true }));
+    req.on('end', () => {
+      if (settled) return;
+      if (tooLarge) {
         finish({ _files: {}, _tooLarge: true });
         return;
       }
-      chunks.push(chunk);
-    });
-    req.on('error', () => finish({ _files: {} }));
-    req.on('end', () => {
-      if (settled) return;
-      const buf = Buffer.concat(chunks);
-      const contentType = req.headers['content-type'] || '';
-      if (contentType.includes('multipart/form-data')) {
-        const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-        const boundary = match ? (match[1] || match[2]).trim() : '';
-        if (boundary) {
-          finish(parseMultipart(buf, boundary));
-          return;
+      try {
+        const buf = Buffer.concat(chunks);
+        const contentType = String(req.headers['content-type'] || '');
+        if (contentType.toLowerCase().includes('multipart/form-data')) {
+          const match = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
+          const boundary = match ? (match[1] || match[2] || '').trim() : '';
+          if (boundary) {
+            finish(parseMultipart(buf, boundary));
+            return;
+          }
+          finish({ _files: {}, _parseError: true });
+        } else {
+          const parsed = querystring.parse(buf.toString('utf8'));
+          parsed._files = {};
+          finish(parsed);
         }
-        finish({ _files: {} });
-      } else {
-        const parsed = querystring.parse(buf.toString('utf8'));
-        parsed._files = {};
-        finish(parsed);
+      } catch (err) {
+        console.error('Body parse error:', err.message);
+        finish({ _files: {}, _parseError: true });
       }
     });
   });
@@ -901,13 +929,14 @@ function saveUploadedImage(fileObj) {
     return { ok: false, error: 'Image file exceeds the 5MB upload limit. Please select a smaller file.' };
   }
 
-  const extFromName = path.extname(fileObj.filename || '').toLowerCase().replace('.', '');
+  const cleanFilename = path.basename(String(fileObj.filename || '').replace(/\\/g, '/'));
+  const extFromName = path.extname(cleanFilename).toLowerCase().replace('.', '');
   const allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
   if (!allowedExts.includes(extFromName)) {
     return { ok: false, error: 'Unsupported image format. Allowed formats: JPG, JPEG, PNG, WEBP (Max 5MB).' };
   }
 
-  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/x-png', 'image/webp'];
   if (fileObj.contentType && fileObj.contentType !== 'application/octet-stream' && !allowedMimes.includes(fileObj.contentType)) {
     return { ok: false, error: 'Unsupported image content type. Allowed formats: JPG, JPEG, PNG, WEBP (Max 5MB).' };
   }
@@ -917,13 +946,18 @@ function saveUploadedImage(fileObj) {
     return { ok: false, error: 'Invalid or corrupted image file. Allowed formats: JPG, JPEG, PNG, WEBP (Max 5MB).' };
   }
 
-  if (!fs.existsSync(UPLOADS_DIR)) {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+    const filename = `item_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${detectedExt}`;
+    const targetPath = path.join(UPLOADS_DIR, filename);
+    fs.writeFileSync(targetPath, fileObj.buffer);
+    return { ok: true, path: `uploads/${filename}` };
+  } catch (err) {
+    console.error('Failed to save uploaded image:', err.message);
+    return { ok: false, error: 'Unable to store uploaded image on server. Please try again.' };
   }
-  const filename = `item_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${detectedExt}`;
-  const targetPath = path.join(UPLOADS_DIR, filename);
-  fs.writeFileSync(targetPath, fileObj.buffer);
-  return { ok: true, path: `uploads/${filename}` };
 }
 
 function copyUploadedImage(relPath, prefix = 'retitem_') {
@@ -1010,7 +1044,7 @@ function renderEditImageSection(item, colClass = 'col-12 col-md-6') {
           ${hasExisting ? `
           <img src="${existingSrc}" alt="${esc(item.item_name)}" class="item-edit-preview" data-fallback-kind="edit">
           <div class="min-w-0">
-              <div class="fw-semibold text-dark small text-truncate">${existingName}</div>
+              <div class="fw-semibold text-dark small text-truncate image-upload-filename" title="${existingName}">${existingName}</div>
               <div class="font-meta text-muted small">Current uploaded photo &middot; Leave empty to keep</div>
           </div>` : ''}
       </div>
@@ -4098,7 +4132,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Require login for app routes
-    if (!currentUser()) {
+    const actor = currentUser();
+    if (!actor) {
       return redirect(res, '/login.php');
     }
 
@@ -4140,43 +4175,57 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/lost_items/index.php');
     }
     const body = await parseBody(req);
+    if (body._tooLarge) {
+      setFlash('error', 'Uploaded image exceeds the maximum request size limit (Max 5MB).');
+      return redirect(res, '/lost_items/report.php');
+    }
+    if (body._parseError || body._readError) {
+      setFlash('error', 'Unable to process form submission. Please try again.');
+      return redirect(res, '/lost_items/report.php');
+    }
     const action = body.action || '';
     if (action === 'create') {
-      const itemName = (body.item_name || '').trim();
-      const dateLost = (body.date_lost || '').trim();
-      const locationLost = (body.location_lost || '').trim();
-      const description = (body.description || '').trim();
-      const contactInfo = (body.contact_info || '').trim();
-      if (!itemName || !dateLost || !locationLost || !description || !contactInfo) {
-        setFlash('error', 'Please fill in all required fields.');
+      try {
+        const itemName = (body.item_name || '').trim();
+        const dateLost = (body.date_lost || '').trim();
+        const locationLost = (body.location_lost || '').trim();
+        const description = (body.description || '').trim();
+        const contactInfo = (body.contact_info || '').trim();
+        if (!itemName || !dateLost || !locationLost || !description || !contactInfo) {
+          setFlash('error', 'Please fill in all required fields.');
+          return redirect(res, '/lost_items/report.php');
+        }
+        const imgFile = body._files && body._files.image;
+        const uploadRes = imgFile ? saveUploadedImage(imgFile) : { ok: true, path: null };
+        if (!uploadRes.ok) {
+          setFlash('error', uploadRes.error);
+          return redirect(res, '/lost_items/report.php');
+        }
+        const newItem = {
+          id: state.nextIds.lost++,
+          item_name: itemName,
+          category_id: resolveValidCategoryId(body.category_id, 10),
+          description,
+          date_lost: dateLost,
+          location_lost: locationLost,
+          contact_info: contactInfo,
+          image_path: uploadRes.path,
+          status: 'open',
+          reported_by: actor.id,
+          created_at: nowStr(),
+          updated_at: null,
+        };
+        state.lostItems.unshift(newItem);
+        createRoleItemNotifications(actor, 'lost_item', newItem.id);
+        logActivity('CREATE_LOST_ITEM', 'lost_items', newItem.id, `Reported lost item: ${itemName}`, actor);
+        saveState();
+        setFlash('success', `Lost item '${itemName}' recorded successfully.`);
+        return redirect(res, '/lost_items/index.php');
+      } catch (err) {
+        console.error('Lost item create error:', err);
+        setFlash('error', 'Failed to save lost item report. Please try again.');
         return redirect(res, '/lost_items/report.php');
       }
-      const imgFile = body._files && body._files.image;
-      const uploadRes = imgFile ? saveUploadedImage(imgFile) : { ok: true, path: null };
-      if (!uploadRes.ok) {
-        setFlash('error', uploadRes.error);
-        return redirect(res, '/lost_items/report.php');
-      }
-      const newItem = {
-        id: state.nextIds.lost++,
-        item_name: itemName,
-        category_id: resolveValidCategoryId(body.category_id, 10),
-        description,
-        date_lost: dateLost,
-        location_lost: locationLost,
-        contact_info: contactInfo,
-        image_path: uploadRes.path,
-        status: 'open',
-        reported_by: currentUser().id,
-        created_at: nowStr(),
-        updated_at: null,
-      };
-      state.lostItems.unshift(newItem);
-      createRoleItemNotifications(currentUser(), 'lost_item', newItem.id);
-      logActivity('CREATE_LOST_ITEM', 'lost_items', newItem.id, `Reported lost item: ${itemName}`);
-      saveState();
-      setFlash('success', `Lost item '${itemName}' recorded successfully.`);
-      return redirect(res, '/lost_items/index.php');
     }
     if (action === 'update') {
       const id = Number(body.id || 0);
@@ -4272,44 +4321,58 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/found_items/index.php');
     }
     const body = await parseBody(req);
+    if (body._tooLarge) {
+      setFlash('error', 'Uploaded image exceeds the maximum request size limit (Max 5MB).');
+      return redirect(res, '/found_items/add.php');
+    }
+    if (body._parseError || body._readError) {
+      setFlash('error', 'Unable to process form submission. Please try again.');
+      return redirect(res, '/found_items/add.php');
+    }
     const action = body.action || '';
     if (action === 'create') {
-      const itemName = (body.item_name || '').trim();
-      const dateFound = (body.date_found || '').trim();
-      const locationFound = (body.location_found || '').trim();
-      const storageLocation = (body.storage_location || '').trim();
-      const description = (body.description || '').trim();
-      if (!itemName || !dateFound || !locationFound || !storageLocation || !description) {
-        setFlash('error', 'Please fill in all required fields.');
+      try {
+        const itemName = (body.item_name || '').trim();
+        const dateFound = (body.date_found || '').trim();
+        const locationFound = (body.location_found || '').trim();
+        const storageLocation = (body.storage_location || '').trim();
+        const description = (body.description || '').trim();
+        if (!itemName || !dateFound || !locationFound || !storageLocation || !description) {
+          setFlash('error', 'Please fill in all required fields.');
+          return redirect(res, '/found_items/add.php');
+        }
+        const imgFile = body._files && body._files.image;
+        const uploadRes = imgFile ? saveUploadedImage(imgFile) : { ok: true, path: null };
+        if (!uploadRes.ok) {
+          setFlash('error', uploadRes.error);
+          return redirect(res, '/found_items/add.php');
+        }
+        const newItem = {
+          id: state.nextIds.found++,
+          item_name: itemName,
+          category_id: resolveValidCategoryId(body.category_id, 10),
+          description,
+          date_found: dateFound,
+          location_found: locationFound,
+          storage_location: storageLocation,
+          notes: (body.notes || '').trim(),
+          image_path: uploadRes.path,
+          status: 'available',
+          recorded_by: actor.id,
+          created_at: nowStr(),
+          updated_at: null,
+        };
+        state.foundItems.unshift(newItem);
+        createRoleItemNotifications(actor, 'found_item', newItem.id);
+        logActivity('CREATE_FOUND_ITEM', 'found_items', newItem.id, `Recorded found item: ${itemName} (Storage: ${storageLocation})`, actor);
+        saveState();
+        setFlash('success', `Found item '${itemName}' recorded into storage.`);
+        return redirect(res, '/found_items/index.php');
+      } catch (err) {
+        console.error('Found item create error:', err);
+        setFlash('error', 'Failed to save found item record. Please try again.');
         return redirect(res, '/found_items/add.php');
       }
-      const imgFile = body._files && body._files.image;
-      const uploadRes = imgFile ? saveUploadedImage(imgFile) : { ok: true, path: null };
-      if (!uploadRes.ok) {
-        setFlash('error', uploadRes.error);
-        return redirect(res, '/found_items/add.php');
-      }
-      const newItem = {
-        id: state.nextIds.found++,
-        item_name: itemName,
-        category_id: resolveValidCategoryId(body.category_id, 10),
-        description,
-        date_found: dateFound,
-        location_found: locationFound,
-        storage_location: storageLocation,
-        notes: (body.notes || '').trim(),
-        image_path: uploadRes.path,
-        status: 'available',
-        recorded_by: currentUser().id,
-        created_at: nowStr(),
-        updated_at: null,
-      };
-      state.foundItems.unshift(newItem);
-      createRoleItemNotifications(currentUser(), 'found_item', newItem.id);
-      logActivity('CREATE_FOUND_ITEM', 'found_items', newItem.id, `Recorded found item: ${itemName} (Storage: ${storageLocation})`);
-      saveState();
-      setFlash('success', `Found item '${itemName}' recorded into storage.`);
-      return redirect(res, '/found_items/index.php');
     }
     if (action === 'update') {
       const id = Number(body.id || 0);
@@ -4402,6 +4465,14 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/returned_items/index.php');
     }
     const body = await parseBody(req);
+    if (body._tooLarge) {
+      setFlash('error', 'Uploaded files exceed the maximum request size limit (Max 5MB per image).');
+      return redirect(res, '/returned_items/add.php');
+    }
+    if (body._parseError || body._readError) {
+      setFlash('error', 'Unable to process return upload. Please verify your selected photos and try again.');
+      return redirect(res, '/returned_items/add.php');
+    }
     const action = body.action || '';
     if (action === 'create') {
       let matchId = Number(body.match_id || 0) || null;
@@ -4420,127 +4491,140 @@ const server = http.createServer(async (req, res) => {
       if (foundItemId) backParams.push(`found_item_id=${foundItemId}`);
       const backUrl = `/returned_items/add.php${backParams.length ? '?' + backParams.join('&') : ''}`;
 
-      if (!itemName || !receiverName || !dateReturned || !/^\d{4}-\d{2}-\d{2}$/.test(dateReturned)) {
-        setFlash('error', 'Please enter the item name, receiver name, and a valid return date.');
-        return redirect(res, backUrl);
-      }
-
-      const proofFile = body._files && body._files.proof_image;
-      if (!proofFile || (!proofFile.filename && !proofFile.size)) {
-        setFlash('error', 'Please upload a proof photo showing the return handover.');
-        return redirect(res, backUrl);
-      }
-      const proofUpload = saveUploadedImage(proofFile);
-      if (!proofUpload.ok || !proofUpload.path) {
-        setFlash('error', proofUpload.error || 'Invalid proof photo. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB).');
-        return redirect(res, backUrl);
-      }
-
-      let itemImagePath = null;
-      const itemFile = body._files && body._files.item_image;
-      if (itemFile && (itemFile.filename || itemFile.size > 0)) {
-        const itemUpload = saveUploadedImage(itemFile);
-        if (!itemUpload.ok) {
-          deleteUploadedImage(proofUpload.path);
-          setFlash('error', itemUpload.error || 'Invalid item photo. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB).');
+      let proofUploadPath = null;
+      let itemUploadPath = null;
+      try {
+        if (!itemName || !receiverName || !dateReturned || !/^\d{4}-\d{2}-\d{2}$/.test(dateReturned)) {
+          setFlash('error', 'Please enter the item name, receiver name, and a valid return date.');
           return redirect(res, backUrl);
         }
-        itemImagePath = itemUpload.path;
-      }
 
-      if (matchId) {
-        const mRow = state.matches.find((m) => m.id === matchId);
-        if (mRow) {
-          if (!lostItemId) lostItemId = mRow.lost_item_id;
-          if (!foundItemId) foundItemId = mRow.found_item_id;
-        } else {
-          matchId = null;
-        }
-      }
-
-      let linkedLost = null;
-      if (lostItemId) {
-        linkedLost = state.lostItems.find((l) => l.id === lostItemId) || null;
-        if (!linkedLost) {
-          deleteUploadedImage(proofUpload.path);
-          deleteUploadedImage(itemImagePath);
-          setFlash('error', 'Selected lost item record was not found.');
+        const proofFile = body._files && body._files.proof_image;
+        if (!proofFile || (!proofFile.filename && !proofFile.size)) {
+          setFlash('error', 'Please upload a proof photo showing the return handover.');
           return redirect(res, backUrl);
         }
-        if (state.returnedItems.some((r) => r.lost_item_id === lostItemId) || linkedLost.status === 'returned') {
-          deleteUploadedImage(proofUpload.path);
+        const proofUpload = saveUploadedImage(proofFile);
+        if (!proofUpload.ok || !proofUpload.path) {
+          setFlash('error', proofUpload.error || 'Invalid proof photo. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB).');
+          return redirect(res, backUrl);
+        }
+        proofUploadPath = proofUpload.path;
+
+        let itemImagePath = null;
+        const itemFile = body._files && body._files.item_image;
+        if (itemFile && (itemFile.filename || itemFile.size > 0)) {
+          const itemUpload = saveUploadedImage(itemFile);
+          if (!itemUpload.ok) {
+            deleteUploadedImage(proofUploadPath);
+            setFlash('error', itemUpload.error || 'Invalid item photo. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB).');
+            return redirect(res, backUrl);
+          }
+          itemImagePath = itemUpload.path;
+          itemUploadPath = itemUpload.path;
+        }
+
+        if (matchId) {
+          const mRow = state.matches.find((m) => m.id === matchId);
+          if (mRow) {
+            if (!lostItemId) lostItemId = mRow.lost_item_id;
+            if (!foundItemId) foundItemId = mRow.found_item_id;
+          } else {
+            matchId = null;
+          }
+        }
+
+        let linkedLost = null;
+        if (lostItemId) {
+          linkedLost = state.lostItems.find((l) => l.id === lostItemId) || null;
+          if (!linkedLost) {
+            deleteUploadedImage(proofUploadPath);
+            deleteUploadedImage(itemImagePath);
+            setFlash('error', 'Selected lost item record was not found.');
+            return redirect(res, backUrl);
+          }
+          if (state.returnedItems.some((r) => r.lost_item_id === lostItemId) || linkedLost.status === 'returned') {
+            deleteUploadedImage(proofUploadPath);
+            deleteUploadedImage(itemImagePath);
+            setFlash('error', 'This lost item has already been marked as returned.');
+            return redirect(res, '/returned_items/index.php');
+          }
+        }
+
+        let linkedFound = null;
+        if (foundItemId) {
+          linkedFound = state.foundItems.find((f) => f.id === foundItemId) || null;
+          if (!linkedFound) {
+            deleteUploadedImage(proofUploadPath);
+            deleteUploadedImage(itemImagePath);
+            setFlash('error', 'Selected found item record was not found.');
+            return redirect(res, backUrl);
+          }
+          if (state.returnedItems.some((r) => r.found_item_id === foundItemId) || linkedFound.status === 'returned') {
+            deleteUploadedImage(proofUploadPath);
+            deleteUploadedImage(itemImagePath);
+            setFlash('error', 'This found item has already been recorded as returned.');
+            return redirect(res, '/returned_items/index.php');
+          }
+        }
+
+        if (matchId && state.returnedItems.some((r) => r.match_id === matchId)) {
+          deleteUploadedImage(proofUploadPath);
           deleteUploadedImage(itemImagePath);
-          setFlash('error', 'This lost item has already been marked as returned.');
+          setFlash('error', 'This matched item has already been recorded as returned.');
           return redirect(res, '/returned_items/index.php');
         }
-      }
 
-      let linkedFound = null;
-      if (foundItemId) {
-        linkedFound = state.foundItems.find((f) => f.id === foundItemId) || null;
-        if (!linkedFound) {
-          deleteUploadedImage(proofUpload.path);
-          deleteUploadedImage(itemImagePath);
-          setFlash('error', 'Selected found item record was not found.');
-          return redirect(res, backUrl);
+        if (!itemImagePath) {
+          if (linkedFound && linkedFound.image_path) {
+            itemImagePath = copyUploadedImage(linkedFound.image_path, 'retitem_');
+          }
+          if (!itemImagePath && linkedLost && linkedLost.image_path) {
+            itemImagePath = copyUploadedImage(linkedLost.image_path, 'retitem_');
+          }
+          itemUploadPath = itemImagePath;
         }
-        if (state.returnedItems.some((r) => r.found_item_id === foundItemId) || linkedFound.status === 'returned') {
-          deleteUploadedImage(proofUpload.path);
-          deleteUploadedImage(itemImagePath);
-          setFlash('error', 'This found item has already been recorded as returned.');
-          return redirect(res, '/returned_items/index.php');
-        }
-      }
 
-      if (matchId && state.returnedItems.some((r) => r.match_id === matchId)) {
-        deleteUploadedImage(proofUpload.path);
-        deleteUploadedImage(itemImagePath);
-        setFlash('error', 'This matched item has already been recorded as returned.');
+        const newReturn = {
+          id: state.nextIds.returned++,
+          lost_item_id: lostItemId,
+          found_item_id: foundItemId,
+          match_id: matchId,
+          item_name: itemName,
+          category_id: resolveValidCategoryId(body.category_id, null),
+          description: description || null,
+          item_image_path: itemImagePath,
+          receiver_name: receiverName,
+          receiver_contact: receiverContact || null,
+          date_returned: dateReturned,
+          proof_image_path: proofUploadPath,
+          notes: notes || null,
+          recorded_by: actor.id,
+          created_at: nowStr(),
+        };
+        state.returnedItems.unshift(newReturn);
+
+        if (linkedLost) {
+          linkedLost.status = 'returned';
+          linkedLost.updated_at = nowStr();
+        }
+        if (linkedFound) {
+          linkedFound.status = 'returned';
+          linkedFound.updated_at = nowStr();
+        }
+
+        createRoleItemNotifications(actor, 'returned_item', newReturn.id);
+        logActivity('CREATE_RETURNED_ITEM', 'returned_items', newReturn.id, `Recorded return of '${itemName}' to ${receiverName}`, actor);
+        saveState();
+        setFlash('success', `Return record for '${itemName}' saved successfully.`);
         return redirect(res, '/returned_items/index.php');
+      } catch (err) {
+        console.error('Returned item create error:', err);
+        deleteUploadedImage(proofUploadPath);
+        deleteUploadedImage(itemUploadPath);
+        setFlash('error', 'Failed to save return record. Please try again.');
+        return redirect(res, backUrl);
       }
-
-      if (!itemImagePath) {
-        if (linkedFound && linkedFound.image_path) {
-          itemImagePath = copyUploadedImage(linkedFound.image_path, 'retitem_');
-        }
-        if (!itemImagePath && linkedLost && linkedLost.image_path) {
-          itemImagePath = copyUploadedImage(linkedLost.image_path, 'retitem_');
-        }
-      }
-
-      const newReturn = {
-        id: state.nextIds.returned++,
-        lost_item_id: lostItemId,
-        found_item_id: foundItemId,
-        match_id: matchId,
-        item_name: itemName,
-        category_id: resolveValidCategoryId(body.category_id, null),
-        description: description || null,
-        item_image_path: itemImagePath,
-        receiver_name: receiverName,
-        receiver_contact: receiverContact || null,
-        date_returned: dateReturned,
-        proof_image_path: proofUpload.path,
-        notes: notes || null,
-        recorded_by: currentUser().id,
-        created_at: nowStr(),
-      };
-      state.returnedItems.unshift(newReturn);
-
-      if (linkedLost) {
-        linkedLost.status = 'returned';
-        linkedLost.updated_at = nowStr();
-      }
-      if (linkedFound) {
-        linkedFound.status = 'returned';
-        linkedFound.updated_at = nowStr();
-      }
-
-      createRoleItemNotifications(currentUser(), 'returned_item', newReturn.id);
-      logActivity('CREATE_RETURNED_ITEM', 'returned_items', newReturn.id, `Recorded return of '${itemName}' to ${receiverName}`);
-      saveState();
-      setFlash('success', `Return record for '${itemName}' saved successfully.`);
-      return redirect(res, '/returned_items/index.php');
     }
     if (action === 'delete') {
       const id = Number(body.id || 0);
@@ -4564,7 +4648,7 @@ const server = http.createServer(async (req, res) => {
         }
         state.returnedItems = state.returnedItems.filter((r) => r.id !== id);
         state.notifications = state.notifications.filter((n) => !(n.related_item_type === 'returned_item' && n.related_item_id === id));
-        logActivity('DELETE_RETURNED_ITEM', 'returned_items', id, `Deleted returned item record #${id}`);
+        logActivity('DELETE_RETURNED_ITEM', 'returned_items', id, `Deleted returned item record #${id}`, actor);
         saveState();
         setFlash('success', 'Returned item record deleted.');
       }
@@ -4597,7 +4681,7 @@ const server = http.createServer(async (req, res) => {
         id: state.nextIds.match++,
         lost_item_id: lostId,
         found_item_id: foundId,
-        confirmed_by: currentUser().id,
+        confirmed_by: actor.id,
         notes: (body.notes || '').trim(),
         created_at: nowStr(),
       };
@@ -4606,7 +4690,7 @@ const server = http.createServer(async (req, res) => {
       lost.updated_at = nowStr();
       found.status = 'matched';
       found.updated_at = nowStr();
-      logActivity('CREATE_MATCH', 'matches', match.id, `Created match #${match.id} (Lost #${lostId} <-> Found #${foundId})`);
+      logActivity('CREATE_MATCH', 'matches', match.id, `Created match #${match.id} (Lost #${lostId} <-> Found #${foundId})`, actor);
       saveState();
       setFlash('success', 'Match created successfully. Both items updated to Matched status.');
       return redirect(res, '/matches/index.php');
@@ -4648,13 +4732,13 @@ const server = http.createServer(async (req, res) => {
   if (reqPath === '/profile/index.php') {
     if (req.method === 'POST') {
       const body = await parseBody(req);
-      const u = currentUser();
+      const u = actor;
       if (body.action === 'update_profile') {
         const fullName = (body.full_name || '').trim();
         if (fullName) {
           u.full_name = fullName;
           u.email = (body.email || '').trim();
-          logActivity('UPDATE_PROFILE', 'users', u.id, 'Updated personal profile information');
+          logActivity('UPDATE_PROFILE', 'users', u.id, 'Updated personal profile information', u);
           saveState();
           setFlash('success', 'Profile information updated successfully.');
         } else {
@@ -4672,7 +4756,7 @@ const server = http.createServer(async (req, res) => {
           u.password_hash = hashPassword(next);
           delete u.password;
           u.updated_at = nowStr();
-          logActivity('CHANGE_PASSWORD', 'users', u.id, 'Updated account security password');
+          logActivity('CHANGE_PASSWORD', 'users', u.id, 'Updated account security password', u);
           saveState();
           setFlash('success', 'Password updated successfully.');
         }
@@ -4838,25 +4922,25 @@ const server = http.createServer(async (req, res) => {
           }
         } else if (body.action === 'toggle_status') {
           const uid = Number(body.user_id || 0);
-          if (uid === currentUser().id) {
+          if (uid === actor.id) {
             setFlash('error', 'You cannot change the status of your own account.');
           } else {
             const target = state.users.find((x) => x.id === uid);
             if (target) {
               target.status = body.status === 'active' ? 'active' : 'inactive';
-              logActivity('UPDATE_USER_STATUS', 'users', uid, `Changed status of user #${uid} to ${target.status}`);
+              logActivity('UPDATE_USER_STATUS', 'users', uid, `Changed status of user #${uid} to ${target.status}`, actor);
               saveState();
               setFlash('success', `User account status updated to ${target.status}.`);
             }
           }
         } else if (body.action === 'delete_user') {
           const uid = Number(body.user_id || 0);
-          if (uid === currentUser().id) {
+          if (uid === actor.id) {
             setFlash('error', 'You cannot delete your own account.');
           } else {
             state.users = state.users.filter((x) => x.id !== uid);
             state.notifications = state.notifications.filter((n) => n.recipient_user_id !== uid && n.sender_user_id !== uid);
-            logActivity('DELETE_USER', 'users', uid, `Deleted user #${uid}`);
+            logActivity('DELETE_USER', 'users', uid, `Deleted user #${uid}`, actor);
             saveState();
             setFlash('success', 'User account deleted successfully.');
           }
@@ -4920,7 +5004,7 @@ const server = http.createServer(async (req, res) => {
         const filename = `foundu_backup_${todayStr()}.sql`;
         const bLog = {
           id: state.nextIds.backup++,
-          user_id: currentUser().id,
+          user_id: actor.id,
           filename,
           size_bytes: Buffer.byteLength(dump, 'utf8'),
           action: 'backup',
@@ -4928,7 +5012,7 @@ const server = http.createServer(async (req, res) => {
           created_at: nowStr(),
         };
         state.backupLogs.unshift(bLog);
-        logActivity('EXPORT_BACKUP', 'backup_logs', bLog.id, `Generated database backup ${filename} (${bLog.size_bytes} bytes)`);
+        logActivity('EXPORT_BACKUP', 'backup_logs', bLog.id, `Generated database backup ${filename} (${bLog.size_bytes} bytes)`, actor);
         saveState();
         res.writeHead(200, {
           'Content-Type': 'application/sql',

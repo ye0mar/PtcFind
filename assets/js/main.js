@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function () {
             previewBox.innerHTML =
                 '<img src="' + escapeHtml(existingSrc) + '" alt="' + escapeHtml(existingName) + '" class="item-edit-preview" data-fallback-kind="edit">' +
                 '<div class="min-w-0">' +
-                '<div class="fw-semibold text-dark small text-truncate">' + escapeHtml(existingName) + '</div>' +
+                '<div class="fw-semibold text-dark small text-truncate image-upload-filename" title="' + escapeHtml(existingName) + '">' + escapeHtml(existingName) + '</div>' +
                 '<div class="font-meta text-muted small">Current uploaded photo &middot; Leave empty to keep</div>' +
                 '</div>';
         } else {
@@ -231,7 +231,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     previewBox.innerHTML =
                         '<img src="' + escapeHtml(resultUrl) + '" alt="Selected image preview" class="item-edit-preview">' +
                         '<div class="min-w-0">' +
-                        '<div class="fw-semibold text-dark small text-truncate">' + escapeHtml(file.name) + '</div>' +
+                        '<div class="fw-semibold text-dark small text-truncate image-upload-filename" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</div>' +
                         '<div class="font-meta text-primary small">' + formatBytes(file.size) + ' &middot; Ready to upload</div>' +
                         '</div>';
                 };

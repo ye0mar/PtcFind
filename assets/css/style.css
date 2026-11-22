@@ -1008,6 +1008,10 @@ h4, .h4, h5, .h5, h6, .h6 {
     background-color: var(--fu-surface-alt);
 }
 
+.min-w-0 {
+    min-width: 0 !important;
+}
+
 .image-upload-preview-card {
     background-color: var(--fu-surface-alt);
     border: 1px solid var(--fu-border);
@@ -1016,6 +1020,27 @@ h4, .h4, h5, .h5, h6, .h6 {
     display: flex;
     align-items: center;
     gap: 0.9rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.image-upload-preview-card > div {
+    flex: 1 1 0%;
+    min-width: 0 !important;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.image-upload-preview-card .image-upload-filename,
+.image-upload-preview-card .text-truncate {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .item-edit-preview {
