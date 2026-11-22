@@ -23,7 +23,17 @@ $userId = (int)$user['id'];
 ensure_notifications_table($pdo);
 
 function format_notification_payload(array $n): array {
-    $itemType = $n['related_item_type'] === 'found_item' ? 'found_item' : 'lost_item';
+    $rawType = (string)($n['related_item_type'] ?? 'lost_item');
+    if ($rawType === 'found_item') {
+        $itemType = 'found_item';
+        $itemLabel = 'Found Item';
+    } elseif ($rawType === 'returned_item') {
+        $itemType = 'returned_item';
+        $itemLabel = 'Returned Item';
+    } else {
+        $itemType = 'lost_item';
+        $itemLabel = 'Lost Item';
+    }
     $senderRole = $n['sender_role'] === 'admin' ? 'admin' : 'staff';
     $id = (int)$n['id'];
     return [
@@ -34,7 +44,7 @@ function format_notification_payload(array $n): array {
         'sender_role'        => $senderRole,
         'related_item_id'    => (int)$n['related_item_id'],
         'related_item_type'  => $itemType,
-        'related_item_label' => $itemType === 'found_item' ? 'Found Item' : 'Lost Item',
+        'related_item_label' => $itemLabel,
         'related_item_name'  => (string)($n['related_item_name'] ?? ('Item #' . (int)$n['related_item_id'])),
         'item_exists'        => (bool)($n['item_exists'] ?? false),
         'is_read'            => ((int)$n['is_read']) === 1,

@@ -28,7 +28,7 @@ try {
          FROM lost_items l
          LEFT JOIN categories c ON l.category_id = c.id
          LEFT JOIN users u ON l.reported_by = u.id
-         ORDER BY l.created_at DESC
+         ORDER BY l.created_at DESC, l.id DESC
          LIMIT 5"
     );
     $recentLost = $stmtLost->fetchAll();
@@ -39,7 +39,7 @@ try {
          FROM found_items f
          LEFT JOIN categories c ON f.category_id = c.id
          LEFT JOIN users u ON f.recorded_by = u.id
-         ORDER BY f.created_at DESC
+         ORDER BY f.created_at DESC, f.id DESC
          LIMIT 5"
     );
     $recentFound = $stmtFound->fetchAll();

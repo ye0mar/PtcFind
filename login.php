@@ -116,6 +116,12 @@ require_once __DIR__ . '/includes/header.php';
                                     <span>Login</span>
                                 </button>
                             </div>
+
+                            <div class="text-center">
+                                <a href="<?= base_url('reset_password.php') ?>" class="small font-meta text-decoration-none text-primary fw-medium">
+                                    <i class="fa-solid fa-key me-1"></i> Forgot Password?
+                                </a>
+                            </div>
                         </form>
                     </div>
                 </div>

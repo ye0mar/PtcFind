@@ -60,7 +60,7 @@ $query = "SELECT l.*, c.name AS category_name, u.full_name AS reporter_name
           LEFT JOIN categories c ON l.category_id = c.id
           LEFT JOIN users u ON l.reported_by = u.id
           $whereClause
-          ORDER BY l.created_at DESC
+          ORDER BY l.created_at DESC, l.id DESC
           LIMIT :limit OFFSET :offset";
 
 $stmt = $pdo->prepare($query);

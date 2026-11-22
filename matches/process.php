@@ -80,36 +80,36 @@ switch ($action) {
 
     case 'mark_returned':
         $matchId = (int)($_POST['match_id'] ?? 0);
-
-        try {
-            $pdo->beginTransaction();
-
-            $matchStmt = $pdo->prepare("SELECT lost_item_id, found_item_id FROM matches WHERE id = :id LIMIT 1");
-            $matchStmt->execute([':id' => $matchId]);
-            $matchRow = $matchStmt->fetch();
-
-            if (!$matchRow) {
-                $pdo->rollBack();
-                set_flash('error', 'Match record not found.');
-                header('Location: ' . base_url('matches/index.php'));
-                exit;
-            }
-
-            $pdo->prepare("UPDATE lost_items SET status = 'returned', updated_at = NOW() WHERE id = :id")->execute([':id' => $matchRow['lost_item_id']]);
-            $pdo->prepare("UPDATE found_items SET status = 'returned', updated_at = NOW() WHERE id = :id")->execute([':id' => $matchRow['found_item_id']]);
-
-            $pdo->commit();
-
-            log_activity('RETURN_ITEM', 'matches', $matchId, "Marked match #{$matchId} as claimed & returned to owner");
-            set_flash('success', 'Item marked as successfully returned to owner.');
-        } catch (Exception $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            set_flash('error', 'Error updating return status: ' . $e->getMessage());
+        if (!$matchId) {
+            set_flash('error', 'Match record not found.');
+            header('Location: ' . base_url('matches/index.php'));
+            exit;
         }
-
-        header('Location: ' . base_url('matches/index.php'));
+        ensure_returned_items_table($pdo);
+        $matchStmt = $pdo->prepare("SELECT id, lost_item_id, found_item_id FROM matches WHERE id = :id LIMIT 1");
+        $matchStmt->execute([':id' => $matchId]);
+        $matchRow = $matchStmt->fetch();
+        if (!$matchRow) {
+            set_flash('error', 'Match record not found.');
+            header('Location: ' . base_url('matches/index.php'));
+            exit;
+        }
+        $retStmt = $pdo->prepare(
+            "SELECT id FROM returned_items WHERE match_id = :mid OR lost_item_id = :lid OR found_item_id = :fid ORDER BY id DESC LIMIT 1"
+        );
+        $retStmt->execute([
+            ':mid' => $matchId,
+            ':lid' => (int)$matchRow['lost_item_id'],
+            ':fid' => (int)$matchRow['found_item_id'],
+        ]);
+        $existingRetId = (int)$retStmt->fetchColumn();
+        if ($existingRetId > 0) {
+            set_flash('info', 'This matched item has already been recorded as returned.');
+            header('Location: ' . base_url('returned_items/view.php?id=' . $existingRetId));
+            exit;
+        }
+        set_flash('info', 'Please enter the receiver details and upload a proof photo to complete the return.');
+        header('Location: ' . base_url('returned_items/add.php?match_id=' . $matchId));
         exit;
 
     case 'delete':

@@ -117,8 +117,8 @@ require_once __DIR__ . '/../includes/navbar.php';
                             <h5 class="font-display fw-semibold text-dark mb-1">No notifications yet</h5>
                             <p class="font-meta text-muted small mb-0">
                                 <?= $user['role'] === 'admin'
-                                    ? 'You will be notified automatically whenever staff operators add a new Lost Item or Found Item.'
-                                    : 'You will be notified automatically whenever administrators add a new Lost Item or Found Item.' ?>
+                                    ? 'You will be notified automatically whenever staff operators add a new Lost, Found, or Returned Item.'
+                                    : 'You will be notified automatically whenever administrators add a new Lost, Found, or Returned Item.' ?>
                             </p>
                         </div>
                     </div>
@@ -127,8 +127,17 @@ require_once __DIR__ . '/../includes/navbar.php';
                         <?php foreach ($notifications as $notif): ?>
                             <?php
                                 $isRead = ((int)$notif['is_read']) === 1;
-                                $isFound = ($notif['related_item_type'] === 'found_item');
-                                $itemLabel = $isFound ? 'Found Item' : 'Lost Item';
+                                $itemType = (string)($notif['related_item_type'] ?? 'lost_item');
+                                if ($itemType === 'found_item') {
+                                    $itemLabel = 'Found Item';
+                                    $itemIcon = 'fa-box-open';
+                                } elseif ($itemType === 'returned_item') {
+                                    $itemLabel = 'Returned Item';
+                                    $itemIcon = 'fa-clipboard-check';
+                                } else {
+                                    $itemLabel = 'Lost Item';
+                                    $itemIcon = 'fa-circle-question';
+                                }
                                 $senderRole = ($notif['sender_role'] === 'admin') ? 'admin' : 'staff';
                                 $senderName = $notif['sender_name'] ?? 'Operator';
                                 $itemName = $notif['related_item_name'] ?? ('Item #' . (int)$notif['related_item_id']);
@@ -137,7 +146,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                                 <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
                                     <div class="d-flex align-items-start gap-3 min-w-0">
                                         <div class="notification-icon-wrap">
-                                            <i class="fa-solid <?= $isFound ? 'fa-box-open' : 'fa-circle-question' ?>"></i>
+                                            <i class="fa-solid <?= $itemIcon ?>"></i>
                                         </div>
                                         <div class="min-w-0">
                                             <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
@@ -149,7 +158,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                                                     <?= strtoupper($senderRole) ?>
                                                 </span>
                                                 <span class="notification-type-badge">
-                                                    <i class="fa-solid <?= $isFound ? 'fa-box-open' : 'fa-circle-question' ?>"></i>
+                                                    <i class="fa-solid <?= $itemIcon ?>"></i>
                                                     <span><?= $itemLabel ?></span>
                                                 </span>
                                             </div>

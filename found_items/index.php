@@ -59,7 +59,7 @@ $query = "SELECT f.*, c.name AS category_name, u.full_name AS recorder_name
           LEFT JOIN categories c ON f.category_id = c.id
           LEFT JOIN users u ON f.recorded_by = u.id
           $whereClause
-          ORDER BY f.created_at DESC
+          ORDER BY f.created_at DESC, f.id DESC
           LIMIT :limit OFFSET :offset";
 
 $stmt = $pdo->prepare($query);

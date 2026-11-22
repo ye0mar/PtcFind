@@ -13,7 +13,8 @@ $user = current_user();
 
 // Handle Export SQL Download
 if (isset($_GET['download']) && $_GET['download'] === 'sql') {
-    $tables = ['users', 'categories', 'lost_items', 'found_items', 'matches', 'activity_logs', 'system_settings', 'backup_logs'];
+    ensure_returned_items_table($pdo);
+    $tables = ['users', 'categories', 'lost_items', 'found_items', 'matches', 'returned_items', 'notifications', 'activity_logs', 'system_settings', 'backup_logs'];
     $sqlDump = "-- =========================================================\n";
     $sqlDump .= "-- FoundU Database Backup\n";
     $sqlDump .= "-- Generated on: " . date('Y-m-d H:i:s') . "\n";
@@ -85,7 +86,7 @@ $backups = $pdo->query(
     "SELECT b.*, u.full_name AS operator_name
      FROM backup_logs b
      LEFT JOIN users u ON b.user_id = u.id
-     ORDER BY b.created_at DESC"
+     ORDER BY b.created_at DESC, b.id DESC"
 )->fetchAll();
 
 $pageTitle = 'Database Backup & Recovery';

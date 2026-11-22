@@ -9,18 +9,24 @@ require_login();
 require_once __DIR__ . '/../includes/csrf.php';
 
 $pdo = get_db_connection();
+ensure_returned_items_table($pdo);
 
-// Fetch matches with lost and found item details
+// Fetch matches with lost, found, and return details
 $matchesQuery = "
     SELECT m.*,
            l.item_name AS lost_name, l.date_lost, l.location_lost, l.contact_info, l.status AS lost_status, l.image_path AS lost_image,
            f.item_name AS found_name, f.date_found, f.storage_location, f.status AS found_status, f.image_path AS found_image,
-           u.full_name AS confirmed_by_name
+           u.full_name AS confirmed_by_name,
+           (SELECT r.id
+            FROM returned_items r
+            WHERE r.match_id = m.id OR r.lost_item_id = m.lost_item_id OR r.found_item_id = m.found_item_id
+            ORDER BY r.id DESC
+            LIMIT 1) AS returned_item_id
     FROM matches m
     JOIN lost_items l ON m.lost_item_id = l.id
     JOIN found_items f ON m.found_item_id = f.id
     LEFT JOIN users u ON m.confirmed_by = u.id
-    ORDER BY m.created_at DESC
+    ORDER BY m.created_at DESC, m.id DESC
 ";
 $matches = $pdo->query($matchesQuery)->fetchAll();
 
@@ -130,18 +136,15 @@ require_once __DIR__ . '/../includes/navbar.php';
                                             <td class="small font-meta text-muted text-nowrap"><?= format_datetime($m['created_at']) ?></td>
                                             <td class="text-end pe-4">
                                                 <div class="d-inline-flex align-items-center gap-1">
-                                                    <?php if ($m['lost_status'] !== 'returned'): ?>
-                                                        <form method="POST" action="<?= base_url('matches/process.php') ?>" class="d-inline">
-                                                            <?= csrf_field() ?>
-                                                            <input type="hidden" name="action" value="mark_returned">
-                                                            <input type="hidden" name="match_id" value="<?= $m['id'] ?>">
-                                                            <input type="hidden" name="lost_item_id" value="<?= $m['lost_item_id'] ?>">
-                                                            <input type="hidden" name="found_item_id" value="<?= $m['found_item_id'] ?>">
-                                                            <button type="submit" class="btn btn-success btn-sm" title="Mark as Claimed & Returned to Owner">
-                                                                <i class="fa-solid fa-check"></i>
-                                                                <span>Return</span>
-                                                            </button>
-                                                        </form>
+                                                    <?php if (!empty($m['returned_item_id'])): ?>
+                                                        <a href="<?= base_url('returned_items/view.php?id=' . (int)$m['returned_item_id']) ?>" class="badge status-badge-claimed text-decoration-none" title="View Return Record &amp; Proof Photo">
+                                                            RETURNED <i class="fa-solid fa-arrow-up-right-from-square ms-1"></i>
+                                                        </a>
+                                                    <?php elseif ($m['lost_status'] !== 'returned' && $m['found_status'] !== 'returned'): ?>
+                                                        <a href="<?= base_url('returned_items/add.php?match_id=' . (int)$m['id']) ?>" class="btn btn-success btn-sm" title="Record Item Return with Receiver &amp; Proof Photo">
+                                                            <i class="fa-solid fa-clipboard-check"></i>
+                                                            <span>Return</span>
+                                                        </a>
                                                     <?php else: ?>
                                                         <span class="badge status-badge-claimed">RETURNED</span>
                                                     <?php endif; ?>

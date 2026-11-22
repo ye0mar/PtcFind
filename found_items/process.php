@@ -44,6 +44,13 @@ switch ($action) {
 
         try {
             ensure_notifications_table($pdo);
+            if ($categoryId) {
+                $catCheck = $pdo->prepare("SELECT id FROM categories WHERE id = :cid LIMIT 1");
+                $catCheck->execute([':cid' => $categoryId]);
+                if (!$catCheck->fetchColumn()) {
+                    $categoryId = null;
+                }
+            }
             $pdo->beginTransaction();
 
             $stmt = $pdo->prepare(
@@ -99,6 +106,13 @@ switch ($action) {
         }
 
         try {
+            if ($categoryId) {
+                $catCheck = $pdo->prepare("SELECT id FROM categories WHERE id = :cid LIMIT 1");
+                $catCheck->execute([':cid' => $categoryId]);
+                if (!$catCheck->fetchColumn()) {
+                    $categoryId = null;
+                }
+            }
             $oldStmt = $pdo->prepare("SELECT image_path FROM found_items WHERE id = :id LIMIT 1");
             $oldStmt->execute([':id' => $id]);
             $oldImage = $oldStmt->fetchColumn();
@@ -170,10 +184,12 @@ switch ($action) {
         $id = (int)($_POST['id'] ?? 0);
         if ($id) {
             try {
+                ensure_notifications_table($pdo);
                 $imgStmt = $pdo->prepare("SELECT image_path FROM found_items WHERE id = :id LIMIT 1");
                 $imgStmt->execute([':id' => $id]);
                 $oldImage = $imgStmt->fetchColumn();
 
+                $pdo->prepare("DELETE FROM notifications WHERE related_item_type = 'found_item' AND related_item_id = :id")->execute([':id' => $id]);
                 $stmt = $pdo->prepare("DELETE FROM found_items WHERE id = :id");
                 $stmt->execute([':id' => $id]);
                 delete_uploaded_image($oldImage ?: null);

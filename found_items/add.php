@@ -57,7 +57,7 @@ require_once __DIR__ . '/../includes/navbar.php';
 
                             <div class="col-12 col-md-6">
                                 <label for="dateFound" class="form-label small">Date Found <span class="text-danger">*</span></label>
-                                <input type="date" class="form-control" id="dateFound" name="date_found" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>" required>
+                                <input type="date" class="form-control" id="dateFound" name="date_found" value="<?= date('Y-m-d') ?>" required>
                                 <div class="invalid-feedback">Please select the date found.</div>
                             </div>
 

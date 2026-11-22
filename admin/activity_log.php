@@ -43,7 +43,7 @@ $query = "SELECT a.*, u.username, u.full_name
           FROM activity_logs a
           LEFT JOIN users u ON a.user_id = u.id
           $whereClause
-          ORDER BY a.created_at DESC
+          ORDER BY a.created_at DESC, a.id DESC
           LIMIT :limit OFFSET :offset";
 
 $stmt = $pdo->prepare($query);

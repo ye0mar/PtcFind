@@ -39,7 +39,7 @@ $lostMatchesStmt = $pdo->prepare(
      LEFT JOIN categories c ON l.category_id = c.id
      LEFT JOIN users u ON l.reported_by = u.id
      WHERE l.category_id = :cat AND l.status = 'open'
-     ORDER BY l.created_at DESC
+     ORDER BY l.created_at DESC, l.id DESC
      LIMIT 5"
 );
 $lostMatchesStmt->execute([':cat' => $item['category_id']]);
@@ -56,6 +56,20 @@ $existingMatchStmt = $pdo->prepare(
 );
 $existingMatchStmt->execute([':fid' => $id]);
 $existingMatch = $existingMatchStmt->fetch();
+
+ensure_returned_items_table($pdo);
+$returnStmt = $pdo->prepare(
+    "SELECT id, receiver_name, date_returned
+     FROM returned_items
+     WHERE found_item_id = :fid" . ($existingMatch ? " OR match_id = :mid" : "") . "
+     ORDER BY id DESC LIMIT 1"
+);
+$returnParams = [':fid' => $id];
+if ($existingMatch) {
+    $returnParams[':mid'] = (int)$existingMatch['id'];
+}
+$returnStmt->execute($returnParams);
+$returnedRecord = $returnStmt->fetch();
 
 $pageTitle = 'View Found Item: ' . $item['item_name'];
 require_once __DIR__ . '/../includes/header.php';
@@ -77,7 +91,16 @@ require_once __DIR__ . '/../includes/navbar.php';
                         STATUS: <?= strtoupper(sanitize($item['status'])) ?>
                     </span>
                 </div>
-                <div class="d-flex gap-2">
+                <div class="d-flex flex-wrap gap-2">
+                    <?php if ($returnedRecord): ?>
+                        <a href="<?= base_url('returned_items/view.php?id=' . (int)$returnedRecord['id']) ?>" class="btn btn-success btn-sm">
+                            <i class="fa-solid fa-clipboard-check"></i> View Return Log
+                        </a>
+                    <?php elseif ($item['status'] !== 'returned'): ?>
+                        <a href="<?= base_url('returned_items/add.php?' . ($existingMatch ? ('match_id=' . (int)$existingMatch['id']) : ('found_item_id=' . (int)$item['id']))) ?>" class="btn btn-success btn-sm">
+                            <i class="fa-solid fa-clipboard-check"></i> Record Return
+                        </a>
+                    <?php endif; ?>
                     <a href="<?= base_url('found_items/edit.php?id=' . $item['id']) ?>" class="btn btn-outline-primary btn-sm">
                         <i class="fa-solid fa-pen-to-square"></i> Edit
                     </a>
@@ -93,6 +116,25 @@ require_once __DIR__ . '/../includes/navbar.php';
             </div>
 
             <?= render_flash() ?>
+
+            <?php if ($returnedRecord): ?>
+                <div class="alert alert-success p-4 mb-4">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                        <div class="d-flex align-items-center gap-3">
+                            <div class="stat-icon-wrapper stat-icon-success" style="width: 46px; height: 46px;">
+                                <i class="fa-solid fa-clipboard-check"></i>
+                            </div>
+                            <div>
+                                <h5 class="font-display fw-semibold mb-0">Item Returned to Owner</h5>
+                                <p class="font-meta small mb-0">
+                                    Received by <strong><?= sanitize($returnedRecord['receiver_name']) ?></strong> on <?= format_date($returnedRecord['date_returned']) ?>.
+                                </p>
+                            </div>
+                        </div>
+                        <a href="<?= base_url('returned_items/view.php?id=' . (int)$returnedRecord['id']) ?>" class="btn btn-neutral btn-sm px-3">View Return Proof</a>
+                    </div>
+                </div>
+            <?php endif; ?>
 
             <!-- Existing Match Alert -->
             <?php if ($existingMatch): ?>

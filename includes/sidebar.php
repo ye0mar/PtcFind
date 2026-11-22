@@ -37,6 +37,12 @@ $user = current_user();
                 <span>Matches &amp; Claims</span>
             </a>
         </li>
+        <li class="nav-item">
+            <a href="<?= base_url('returned_items/index.php') ?>" class="nav-link <?= ($currentDir === 'returned_items') ? 'active' : '' ?>">
+                <i class="fa-solid fa-clipboard-check fa-fw"></i>
+                <span>Returned Items</span>
+            </a>
+        </li>
     </ul>
 
     <?php if (is_admin()): ?>

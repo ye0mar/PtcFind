@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             const u = new URL(s, window.location.origin);
             if (u.origin !== window.location.origin) return rawUrl;
-            if (u.pathname.endsWith('/logout.php') || u.pathname === '/logout.php' || u.pathname.endsWith('/login.php')) {
+            if (u.pathname.endsWith('/logout.php') || u.pathname === '/logout.php' || u.pathname.endsWith('/login.php') || u.pathname.endsWith('/reset_password.php')) {
                 return rawUrl;
             }
             if (!u.searchParams.has('_st')) {
@@ -570,12 +570,18 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
+        function getNotificationIcon(itemType) {
+            if (itemType === 'found_item') return 'fa-box-open';
+            if (itemType === 'returned_item') return 'fa-clipboard-check';
+            return 'fa-circle-question';
+        }
+
         function showNotificationToast(notif) {
             if (!toastContainerEl || !notif) return;
             const toast = document.createElement('div');
             toast.className = 'notification-toast';
             const roleClass = notif.sender_role === 'admin' ? 'role-badge-admin' : 'role-badge-staff';
-            const iconClass = notif.related_item_type === 'found_item' ? 'fa-box-open' : 'fa-circle-question';
+            const iconClass = getNotificationIcon(notif.related_item_type);
             toast.innerHTML =
                 '<div class="d-flex align-items-start justify-content-between gap-2">' +
                     '<div class="d-flex align-items-start gap-2 min-w-0">' +
@@ -614,12 +620,17 @@ document.addEventListener('DOMContentLoaded', function () {
         function renderNotificationsListHtml(notifications) {
             if (!listContainerEl) return;
             if (!notifications || !notifications.length) {
+                listContainerEl.innerHTML =
+                    '<div class="card"><div class="card-body text-center py-5">' +
+                        '<div class="stat-icon-wrapper stat-icon-primary mx-auto mb-3"><i class="fa-regular fa-bell"></i></div>' +
+                        '<h5 class="font-display fw-semibold text-dark mb-1">No notifications yet</h5>' +
+                        '<p class="font-meta text-muted small mb-0">Role-based alerts for newly reported Lost, Found, and Returned Items will appear here.</p>' +
+                    '</div></div>';
                 return;
             }
             const cardsHtml = notifications.map(function (notif) {
                 const isRead = !!notif.is_read;
-                const isFound = notif.related_item_type === 'found_item';
-                const iconClass = isFound ? 'fa-box-open' : 'fa-circle-question';
+                const iconClass = getNotificationIcon(notif.related_item_type);
                 const roleClass = notif.sender_role === 'admin' ? 'role-badge-admin' : 'role-badge-staff';
                 const roleLabel = String(notif.sender_role || 'staff').toUpperCase();
                 return '<div class="notification-card ' + (isRead ? 'is-read' : 'is-unread') + '" data-notification-id="' + Number(notif.id) + '">' +
@@ -694,6 +705,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 })
                 .then(function (data) {
                     if (!data || !data.ok) return;
+                    const expectedUserId = parseInt(document.body.getAttribute('data-user-id') || '0', 10) || 0;
+                    if (expectedUserId && data.userId && parseInt(data.userId, 10) !== expectedUserId) {
+                        window.location.reload();
+                        return;
+                    }
                     updateUnreadUI(data.unreadCount);
 
                     const latestId = parseInt(data.latestId || 0, 10) || 0;
@@ -824,6 +840,32 @@ document.addEventListener('DOMContentLoaded', function () {
             if (document.visibilityState === 'visible') {
                 pollNotifications();
             }
+        });
+    }
+
+    // 10. Auto-fill Item Details on Record Return Form when selecting a Found or Lost Item
+    const returnLinkSelects = document.querySelectorAll('[data-return-link-select]');
+    if (returnLinkSelects.length) {
+        const returnItemNameEl = document.getElementById('returnItemName');
+        const returnCategoryEl = document.getElementById('returnCategoryId');
+        const returnDescEl = document.getElementById('returnDescription');
+        const receiverContactEl = document.getElementById('receiverContact');
+
+        returnLinkSelects.forEach(function (sel) {
+            sel.addEventListener('change', function () {
+                const opt = sel.options && sel.options[sel.selectedIndex];
+                if (!opt || !opt.value) return;
+                const dName = opt.getAttribute('data-item-name') || '';
+                const dCat = opt.getAttribute('data-category-id') || '';
+                const dDesc = opt.getAttribute('data-description') || '';
+                const dContact = opt.getAttribute('data-contact') || '';
+                if (returnItemNameEl && dName) returnItemNameEl.value = dName;
+                if (returnCategoryEl && dCat && dCat !== '0') returnCategoryEl.value = dCat;
+                if (returnDescEl && dDesc) returnDescEl.value = dDesc;
+                if (receiverContactEl && dContact && !receiverContactEl.value.trim()) {
+                    receiverContactEl.value = dContact;
+                }
+            });
         });
     }
 });

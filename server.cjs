@@ -34,6 +34,57 @@ const mimeTypes = {
   '.md': 'text/markdown; charset=utf-8',
 };
 
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+function verifyPassword(password, user) {
+  if (!user || typeof password !== 'string') return false;
+  if (typeof user.password_hash === 'string' && user.password_hash.startsWith('scrypt:')) {
+    const parts = user.password_hash.split(':');
+    if (parts.length !== 3) return false;
+    const [, salt, storedHex] = parts;
+    try {
+      const derived = crypto.scryptSync(password, salt, 64);
+      const stored = Buffer.from(storedHex, 'hex');
+      return derived.length === stored.length && crypto.timingSafeEqual(derived, stored);
+    } catch (_) {
+      return false;
+    }
+  }
+  if (typeof user.password === 'string' && user.password.length > 0) {
+    const a = Buffer.from(password, 'utf8');
+    const b = Buffer.from(user.password, 'utf8');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  return false;
+}
+
+function getRecoveryCode() {
+  if (process.env.STAFF_RECOVERY_CODE && process.env.STAFF_RECOVERY_CODE.trim()) {
+    return process.env.STAFF_RECOVERY_CODE.trim();
+  }
+  try {
+    const cfgPath = path.join(__dirname, 'recovery_config.php');
+    if (fs.existsSync(cfgPath)) {
+      const content = fs.readFileSync(cfgPath, 'utf8');
+      const m = content.match(/define\(\s*['"]STAFF_RECOVERY_CODE['"]\s*,\s*(?:getenv\([^)]*\)\s*\?:\s*)?['"]([^'"]+)['"]\s*\)/);
+      if (m && m[1]) return m[1];
+    }
+  } catch (_) {}
+  return 'FOUNDU-STAFF-2026';
+}
+
+function resolveValidCategoryId(rawId, fallback = 10) {
+  const num = Number(rawId || 0);
+  if (num > 0 && state.categories.some((c) => c.id === num)) {
+    return num;
+  }
+  return fallback;
+}
+
 // In-memory store initialized with seed data matching database/lost_and_found_db.sql
 const state = {
   settings: {
@@ -59,7 +110,7 @@ const state = {
       full_name: 'System Administrator',
       username: 'admin',
       email: 'admin@foundu.edu',
-      password: 'admin123',
+      password_hash: hashPassword('admin123'),
       role: 'admin',
       status: 'active',
       last_login: '2026-11-18 09:30:00',
@@ -70,7 +121,7 @@ const state = {
       full_name: 'Campus Staff Officer',
       username: 'staff',
       email: 'staff@foundu.edu',
-      password: 'staff123',
+      password_hash: hashPassword('staff123'),
       role: 'staff',
       status: 'active',
       last_login: '2026-11-17 14:15:00',
@@ -140,6 +191,7 @@ const state = {
     },
   ],
   matches: [],
+  returnedItems: [],
   activityLogs: [
     {
       id: 1,
@@ -154,13 +206,46 @@ const state = {
   ],
   backupLogs: [],
   notifications: [],
-  nextIds: { lost: 3, found: 3, match: 1, user: 3, log: 2, backup: 1, notification: 1 },
+  nextIds: { lost: 3, found: 3, match: 1, returned: 1, user: 3, log: 2, backup: 1, notification: 1 },
 };
 
+function normalizeStateAfterLoad() {
+  let changed = false;
+  if (!Array.isArray(state.returnedItems)) {
+    state.returnedItems = [];
+    changed = true;
+  }
+  for (const u of state.users) {
+    if (!u.password_hash && typeof u.password === 'string' && u.password.length > 0) {
+      u.password_hash = hashPassword(u.password);
+      delete u.password;
+      changed = true;
+    } else if (u.password_hash && 'password' in u) {
+      delete u.password;
+      changed = true;
+    }
+  }
+  const maxOf = (arr) => arr.reduce((m, x) => Math.max(m, Number(x && x.id) || 0), 0);
+  const computedNext = {
+    lost: Math.max(Number(state.nextIds.lost) || 1, maxOf(state.lostItems) + 1),
+    found: Math.max(Number(state.nextIds.found) || 1, maxOf(state.foundItems) + 1),
+    match: Math.max(Number(state.nextIds.match) || 1, maxOf(state.matches) + 1),
+    returned: Math.max(Number(state.nextIds.returned) || 1, maxOf(state.returnedItems) + 1),
+    user: Math.max(Number(state.nextIds.user) || 1, maxOf(state.users) + 1),
+    log: Math.max(Number(state.nextIds.log) || 1, maxOf(state.activityLogs) + 1),
+    backup: Math.max(Number(state.nextIds.backup) || 1, maxOf(state.backupLogs) + 1),
+    notification: Math.max(Number(state.nextIds.notification) || 1, maxOf(state.notifications) + 1),
+  };
+  state.nextIds = computedNext;
+  return changed;
+}
+
 function loadState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = fs.readFileSync(STATE_FILE, 'utf8');
+  const candidates = [STATE_FILE, STATE_FILE + '.bak'];
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const raw = fs.readFileSync(filePath, 'utf8');
       const saved = JSON.parse(raw);
       if (saved && typeof saved === 'object') {
         if (saved.settings) {
@@ -173,6 +258,7 @@ function loadState() {
         if (Array.isArray(saved.lostItems)) state.lostItems = saved.lostItems;
         if (Array.isArray(saved.foundItems)) state.foundItems = saved.foundItems;
         if (Array.isArray(saved.matches)) state.matches = saved.matches;
+        if (Array.isArray(saved.returnedItems)) state.returnedItems = saved.returnedItems;
         if (Array.isArray(saved.activityLogs)) state.activityLogs = saved.activityLogs;
         if (Array.isArray(saved.backupLogs)) state.backupLogs = saved.backupLogs;
         if (Array.isArray(saved.notifications)) state.notifications = saved.notifications;
@@ -190,11 +276,16 @@ function loadState() {
             }
           }
         }
+        if (normalizeStateAfterLoad()) {
+          saveState();
+        }
+        return;
       }
+    } catch (err) {
+      console.error(`Failed to load preview state from ${path.basename(filePath)}:`, err.message);
     }
-  } catch (err) {
-    console.error('Failed to load preview state:', err.message);
   }
+  normalizeStateAfterLoad();
 }
 
 function saveState() {
@@ -220,13 +311,22 @@ function saveState() {
       lostItems: state.lostItems,
       foundItems: state.foundItems,
       matches: state.matches,
+      returnedItems: state.returnedItems,
       activityLogs: state.activityLogs,
       backupLogs: state.backupLogs,
       notifications: state.notifications,
       nextIds: state.nextIds,
       sessions: persistedSessions,
     };
-    fs.writeFileSync(STATE_FILE, JSON.stringify(snapshot, null, 2), 'utf8');
+    const payload = JSON.stringify(snapshot, null, 2);
+    const tmpFile = STATE_FILE + '.tmp';
+    fs.writeFileSync(tmpFile, payload, 'utf8');
+    if (fs.existsSync(STATE_FILE)) {
+      try {
+        fs.copyFileSync(STATE_FILE, STATE_FILE + '.bak');
+      } catch (_) {}
+    }
+    fs.renameSync(tmpFile, STATE_FILE);
   } catch (err) {
     console.error('Failed to save preview state:', err.message);
   }
@@ -403,14 +503,14 @@ function getOrCreateSession(req, res, query = {}) {
           flash: [],
           expiresAt: Number(chosenToken.exp) || (now + SESSION_TTL_MS),
           signedToken: chosenRaw,
-          tokenFallback: !fromCookie && !hasAnyCookieHeader,
+          tokenFallback: !fromCookie,
         };
         sessions.set(sess.id, sess);
       } else {
         sess.userId = activeUser.id;
         sess.expiresAt = now + SESSION_TTL_MS;
         sess.signedToken = chosenRaw;
-        sess.tokenFallback = !fromCookie && !hasAnyCookieHeader;
+        sess.tokenFallback = !fromCookie;
       }
     }
   } else if (cookieRaw && !revokedSids.has(cookieRaw) && sessions.has(cookieRaw)) {
@@ -540,12 +640,22 @@ function logActivity(action, targetType, targetId, details) {
 
 function createRoleItemNotifications(senderUser, relatedItemType, relatedItemId) {
   if (!senderUser || senderUser.status !== 'active') return 0;
-  if (!['lost_item', 'found_item'].includes(relatedItemType) || !relatedItemId) return 0;
+  if (!['lost_item', 'found_item', 'returned_item'].includes(relatedItemType) || !relatedItemId) return 0;
 
   const senderRole = senderUser.role === 'admin' ? 'admin' : 'staff';
   const targetRole = senderRole === 'staff' ? 'admin' : 'staff';
   const senderName = (senderUser.full_name || '').trim() || (senderRole === 'admin' ? 'System Administrator' : 'Campus Staff Officer');
-  const itemLabel = relatedItemType === 'lost_item' ? 'Lost Item' : 'Found Item';
+  let itemLabel = 'Lost Item';
+  let title = 'New Item Added';
+  let message = `${senderName} has added a new Lost Item.`;
+  if (relatedItemType === 'found_item') {
+    itemLabel = 'Found Item';
+    message = `${senderName} has added a new Found Item.`;
+  } else if (relatedItemType === 'returned_item') {
+    itemLabel = 'Returned Item';
+    title = 'Item Returned';
+    message = `${senderName} recorded a returned item handover.`;
+  }
 
   const recipients = state.users.filter(
     (u) => u.role === targetRole && u.status === 'active' && u.id !== senderUser.id
@@ -570,8 +680,8 @@ function createRoleItemNotifications(senderUser, relatedItemType, relatedItemId)
       sender_role: senderRole,
       related_item_id: relatedItemId,
       related_item_type: relatedItemType,
-      title: 'New Item Added',
-      message: `${senderName} has added a new ${itemLabel}.`,
+      title,
+      message,
       is_read: 0,
       read_at: null,
       created_at: nowStr(),
@@ -587,10 +697,20 @@ function getUnreadNotificationCount(userId) {
 
 function formatNotificationPayload(n) {
   const sender = state.users.find((u) => u.id === n.sender_user_id);
-  const isFound = n.related_item_type === 'found_item';
-  const item = isFound
-    ? state.foundItems.find((f) => f.id === n.related_item_id)
-    : state.lostItems.find((l) => l.id === n.related_item_id);
+  const itemType = n.related_item_type === 'found_item'
+    ? 'found_item'
+    : (n.related_item_type === 'returned_item' ? 'returned_item' : 'lost_item');
+  let item = null;
+  let label = 'Lost Item';
+  if (itemType === 'found_item') {
+    item = state.foundItems.find((f) => f.id === n.related_item_id);
+    label = 'Found Item';
+  } else if (itemType === 'returned_item') {
+    item = state.returnedItems.find((r) => r.id === n.related_item_id);
+    label = 'Returned Item';
+  } else {
+    item = state.lostItems.find((l) => l.id === n.related_item_id);
+  }
 
   return {
     id: n.id,
@@ -599,8 +719,8 @@ function formatNotificationPayload(n) {
     sender_name: sender ? sender.full_name : 'Operator',
     sender_role: n.sender_role === 'admin' ? 'admin' : 'staff',
     related_item_id: n.related_item_id,
-    related_item_type: isFound ? 'found_item' : 'lost_item',
-    related_item_label: isFound ? 'Found Item' : 'Lost Item',
+    related_item_type: itemType,
+    related_item_label: label,
     related_item_name: item ? item.item_name : `Item #${n.related_item_id}`,
     item_exists: !!item,
     is_read: !!n.is_read,
@@ -631,7 +751,7 @@ function getUserName(userId, fallback = 'Staff') {
 function appendTokenToLocation(location, token) {
   if (!token || !location) return location;
   const s = String(location);
-  if (s.startsWith('/login.php') || s.startsWith('/logout.php')) return location;
+  if (s.startsWith('/login.php') || s.startsWith('/logout.php') || s.startsWith('/reset_password.php')) return location;
   try {
     const u = new URL(s, 'http://localhost');
     if (!u.searchParams.has('_st')) {
@@ -806,6 +926,32 @@ function saveUploadedImage(fileObj) {
   return { ok: true, path: `uploads/${filename}` };
 }
 
+function copyUploadedImage(relPath, prefix = 'retitem_') {
+  if (!relPath) return null;
+  try {
+    const cleanRel = String(relPath).replace(/^\/+/, '');
+    const sourcePath = path.resolve(__dirname, cleanRel);
+    const uploadsRoot = path.resolve(UPLOADS_DIR) + path.sep;
+    if (!sourcePath.startsWith(uploadsRoot) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+      return null;
+    }
+    const ext = path.extname(sourcePath).toLowerCase().replace('.', '');
+    if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+      return null;
+    }
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+    const newFilename = `${prefix}${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
+    const destPath = path.join(UPLOADS_DIR, newFilename);
+    fs.copyFileSync(sourcePath, destPath);
+    return `uploads/${newFilename}`;
+  } catch (err) {
+    console.error('Failed to copy uploaded image:', err.message);
+    return null;
+  }
+}
+
 function deleteUploadedImage(relPath) {
   if (!relPath) return;
   try {
@@ -970,6 +1116,12 @@ function renderLayout({ title, activeSection, bodyHtml, extraCss = [] }) {
                 <a href="/matches/index.php" class="nav-link ${activeSection === 'matches' ? 'active' : ''}">
                     <i class="fa-solid fa-link fa-fw"></i>
                     <span>Matches &amp; Claims</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a href="/returned_items/index.php" class="nav-link ${activeSection === 'returned_items' ? 'active' : ''}">
+                    <i class="fa-solid fa-clipboard-check fa-fw"></i>
+                    <span>Returned Items</span>
                 </a>
             </li>
         </ul>
@@ -1161,6 +1313,12 @@ function renderLoginPage(error = '', usernameVal = '') {
                                         <span>Login</span>
                                     </button>
                                 </div>
+
+                                <div class="text-center">
+                                    <a href="/reset_password.php" class="small font-meta text-decoration-none text-primary fw-medium">
+                                        <i class="fa-solid fa-key me-1"></i> Forgot Password?
+                                    </a>
+                                </div>
                             </form>
                         </div>
                     </div>
@@ -1171,14 +1329,113 @@ function renderLoginPage(error = '', usernameVal = '') {
   return renderLayout({ title: 'Sign In', activeSection: 'login', bodyHtml, extraCss: ['assets/css/auth.css'] });
 }
 
+function renderResetPasswordPage(error = '', success = '', usernameVal = '') {
+  const bodyHtml = `
+    <div class="auth-page d-flex align-items-center justify-content-center min-vh-100 py-5 bg-gradient-navy">
+        <div class="container">
+            <div class="row justify-content-center">
+                <div class="col-12 col-sm-10 col-md-8 col-lg-5 col-xl-4">
+                    <div class="card auth-card border-0 overflow-hidden">
+                        <div class="card-body p-4 p-sm-5">
+                            <div class="text-center mb-4">
+                                <div class="auth-brand-icon mx-auto mb-3 d-flex align-items-center justify-content-center">
+                                    <i class="fa-solid fa-key fs-3"></i>
+                                </div>
+                                <h3 class="auth-brand-title mb-1">Staff Password Reset</h3>
+                                <p class="font-meta text-muted small mb-0">Enter your staff username and administrator recovery code.</p>
+                            </div>
+
+                            ${renderFlash()}
+                            ${error ? `
+                            <div class="alert alert-danger alert-dismissible fade show d-flex align-items-center mb-4" role="alert">
+                                <i class="fa-solid fa-triangle-exclamation me-2 fs-5"></i>
+                                <div class="small">${esc(error)}</div>
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>` : ''}
+
+                            ${success ? `
+                            <div class="alert alert-success d-flex align-items-start gap-2 mb-4" role="alert">
+                                <i class="fa-solid fa-circle-check mt-1 fs-5"></i>
+                                <div class="small">
+                                    <div class="fw-semibold mb-1">Password Updated</div>
+                                    <div>${esc(success)}</div>
+                                </div>
+                            </div>
+                            <div class="d-grid">
+                                <a href="/login.php" class="btn btn-primary py-2 fw-semibold">
+                                    <i class="fa-solid fa-arrow-left me-1"></i> Back to Login
+                                </a>
+                            </div>` : `
+                            <form method="POST" action="/reset_password.php" class="needs-validation" novalidate autocomplete="off">
+                                <div class="mb-3">
+                                    <label for="resetUsername" class="form-label small fw-medium">Username</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light border-end-0 text-muted">
+                                            <i class="fa-solid fa-user"></i>
+                                        </span>
+                                        <input type="text" class="form-control bg-light border-start-0" id="resetUsername" name="username" value="${esc(usernameVal)}" placeholder="Enter your staff username" required autofocus>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="recoveryCode" class="form-label small fw-medium">Recovery Code</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light border-end-0 text-muted">
+                                            <i class="fa-solid fa-shield-halved"></i>
+                                        </span>
+                                        <input type="password" class="form-control bg-light border-start-0" id="recoveryCode" name="recovery_code" placeholder="Enter administrator recovery code" required>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="newPassword" class="form-label small fw-medium">New Password</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light border-end-0 text-muted">
+                                            <i class="fa-solid fa-lock"></i>
+                                        </span>
+                                        <input type="password" class="form-control bg-light border-start-0" id="newPassword" name="new_password" placeholder="At least 6 characters" minlength="6" required>
+                                    </div>
+                                </div>
+
+                                <div class="mb-4">
+                                    <label for="confirmPassword" class="form-label small fw-medium">Confirm New Password</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light border-end-0 text-muted">
+                                            <i class="fa-solid fa-lock"></i>
+                                        </span>
+                                        <input type="password" class="form-control bg-light border-start-0" id="confirmPassword" name="confirm_password" placeholder="Re-enter new password" minlength="6" required>
+                                    </div>
+                                </div>
+
+                                <div class="d-grid mb-3">
+                                    <button type="submit" class="btn btn-primary py-2 fw-semibold">
+                                        <span>Reset Password</span>
+                                    </button>
+                                </div>
+
+                                <div class="text-center">
+                                    <a href="/login.php" class="small font-meta text-decoration-none text-muted">
+                                        <i class="fa-solid fa-arrow-left me-1"></i> Back to Login
+                                    </a>
+                                </div>
+                            </form>`}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>`;
+  return renderLayout({ title: 'Reset Staff Password', activeSection: 'reset_password', bodyHtml, extraCss: ['assets/css/auth.css'] });
+}
+
 function renderDashboardPage() {
   const u = currentUser();
   const countLostOpen = state.lostItems.filter((i) => i.status === 'open').length;
   const countFoundAvail = state.foundItems.filter((i) => i.status === 'available').length;
   const countMatches = state.matches.length;
   const countUsers = state.users.filter((x) => x.status === 'active').length;
-  const recentLost = state.lostItems.slice(0, 5);
-  const recentFound = state.foundItems.slice(0, 5);
+  const recentLost = [...state.lostItems].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || (b.id - a.id)).slice(0, 5);
+  const recentFound = [...state.foundItems].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || (b.id - a.id)).slice(0, 5);
 
   const bodyHtml = `
     <div class="container-fluid">
@@ -1385,15 +1642,17 @@ function renderLostItemsIndex(query) {
   const statusFilter = (query.status || '').trim();
   const perPage = Math.max(1, parseInt(state.settings.items_per_page || '12', 10));
 
-  const filtered = state.lostItems.filter((item) => {
-    if (search) {
-      const hay = `${item.item_name} ${item.description} ${item.location_lost} ${item.contact_info}`.toLowerCase();
-      if (!hay.includes(search)) return false;
-    }
-    if (catFilter && String(item.category_id) !== catFilter) return false;
-    if (statusFilter && item.status !== statusFilter) return false;
-    return true;
-  });
+  const filtered = [...state.lostItems]
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || (b.id - a.id))
+    .filter((item) => {
+      if (search) {
+        const hay = `${item.item_name} ${item.description} ${item.location_lost} ${item.contact_info}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      if (catFilter && String(item.category_id) !== catFilter) return false;
+      if (statusFilter && item.status !== statusFilter) return false;
+      return true;
+    });
 
   const totalItems = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / perPage));
@@ -1561,7 +1820,7 @@ function renderReportLostPage() {
                         </div>
                         <div class="col-12 col-md-6">
                             <label for="dateLost" class="form-label small">Date Lost <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control" id="dateLost" name="date_lost" value="${todayStr()}" max="${todayStr()}" required>
+                            <input type="date" class="form-control" id="dateLost" name="date_lost" value="${todayStr()}" required>
                             <div class="invalid-feedback">Please select the approximate date the item was lost.</div>
                         </div>
                         <div class="col-12 col-md-6">
@@ -1603,6 +1862,7 @@ function renderLostItemView(id) {
   if (!item) return null;
   const existingMatch = state.matches.find((m) => m.lost_item_id === item.id);
   const matchedFound = existingMatch ? state.foundItems.find((f) => f.id === existingMatch.found_item_id) : null;
+  const returnedRecord = state.returnedItems.find((r) => r.lost_item_id === item.id || (existingMatch && r.match_id === existingMatch.id)) || null;
   const potentialMatches = state.foundItems.filter((f) => f.category_id === item.category_id && f.status === 'available').slice(0, 5);
 
   const bodyHtml = `
@@ -1615,7 +1875,14 @@ function renderLostItemView(id) {
                 <h1 class="h3 fw-semibold mb-2">${esc(item.item_name)}</h1>
                 <span class="badge status-badge-${esc(item.status)}">STATUS: ${esc(item.status.toUpperCase())}</span>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex flex-wrap gap-2">
+                ${returnedRecord ? `
+                <a href="/returned_items/view.php?id=${returnedRecord.id}" class="btn btn-success btn-sm">
+                    <i class="fa-solid fa-clipboard-check"></i> View Return Log
+                </a>` : (item.status !== 'returned' ? `
+                <a href="/returned_items/add.php?${existingMatch ? `match_id=${existingMatch.id}` : `lost_item_id=${item.id}`}" class="btn btn-success btn-sm">
+                    <i class="fa-solid fa-clipboard-check"></i> Record Return
+                </a>` : '')}
                 <a href="/lost_items/edit.php?id=${item.id}" class="btn btn-outline-primary btn-sm">
                     <i class="fa-solid fa-pen-to-square"></i> Edit
                 </a>
@@ -1630,6 +1897,24 @@ function renderLostItemView(id) {
         </div>
 
         ${renderFlash()}
+
+        ${returnedRecord ? `
+        <div class="alert alert-success p-4 mb-4">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="stat-icon-wrapper stat-icon-success" style="width: 46px; height: 46px;">
+                        <i class="fa-solid fa-clipboard-check"></i>
+                    </div>
+                    <div>
+                        <h5 class="font-display fw-semibold mb-0">Item Returned to Owner</h5>
+                        <p class="font-meta small mb-0">
+                            Received by <strong>${esc(returnedRecord.receiver_name)}</strong> on ${fmtDate(returnedRecord.date_returned)}.
+                        </p>
+                    </div>
+                </div>
+                <a href="/returned_items/view.php?id=${returnedRecord.id}" class="btn btn-neutral btn-sm px-3">View Return Proof</a>
+            </div>
+        </div>` : ''}
 
         ${existingMatch && matchedFound ? `
         <div class="alert alert-success p-4 mb-4">
@@ -1824,15 +2109,17 @@ function renderFoundItemsIndex(query) {
   const statusFilter = (query.status || '').trim();
   const perPage = Math.max(1, parseInt(state.settings.items_per_page || '12', 10));
 
-  const filtered = state.foundItems.filter((item) => {
-    if (search) {
-      const hay = `${item.item_name} ${item.description} ${item.location_found} ${item.storage_location}`.toLowerCase();
-      if (!hay.includes(search)) return false;
-    }
-    if (catFilter && String(item.category_id) !== catFilter) return false;
-    if (statusFilter && item.status !== statusFilter) return false;
-    return true;
-  });
+  const filtered = [...state.foundItems]
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || (b.id - a.id))
+    .filter((item) => {
+      if (search) {
+        const hay = `${item.item_name} ${item.description} ${item.location_found} ${item.storage_location}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      if (catFilter && String(item.category_id) !== catFilter) return false;
+      if (statusFilter && item.status !== statusFilter) return false;
+      return true;
+    });
 
   const totalItems = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / perPage));
@@ -2005,7 +2292,7 @@ function renderFoundAddPage() {
                         </div>
                         <div class="col-12 col-md-6">
                             <label for="dateFound" class="form-label small">Date Found <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control" id="dateFound" name="date_found" value="${todayStr()}" max="${todayStr()}" required>
+                            <input type="date" class="form-control" id="dateFound" name="date_found" value="${todayStr()}" required>
                             <div class="invalid-feedback">Please select the date found.</div>
                         </div>
                         <div class="col-12 col-md-6">
@@ -2051,6 +2338,7 @@ function renderFoundItemView(id) {
   if (!item) return null;
   const existingMatch = state.matches.find((m) => m.found_item_id === item.id);
   const matchedLost = existingMatch ? state.lostItems.find((l) => l.id === existingMatch.lost_item_id) : null;
+  const returnedRecord = state.returnedItems.find((r) => r.found_item_id === item.id || (existingMatch && r.match_id === existingMatch.id)) || null;
   const openLostItems = state.lostItems.filter((l) => l.category_id === item.category_id && l.status === 'open').slice(0, 5);
 
   const bodyHtml = `
@@ -2063,7 +2351,14 @@ function renderFoundItemView(id) {
                 <h1 class="h3 fw-semibold mb-2">${esc(item.item_name)}</h1>
                 <span class="badge status-badge-${esc(item.status)}">STATUS: ${esc(item.status.toUpperCase())}</span>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex flex-wrap gap-2">
+                ${returnedRecord ? `
+                <a href="/returned_items/view.php?id=${returnedRecord.id}" class="btn btn-success btn-sm">
+                    <i class="fa-solid fa-clipboard-check"></i> View Return Log
+                </a>` : (item.status !== 'returned' ? `
+                <a href="/returned_items/add.php?${existingMatch ? `match_id=${existingMatch.id}` : `found_item_id=${item.id}`}" class="btn btn-success btn-sm">
+                    <i class="fa-solid fa-clipboard-check"></i> Record Return
+                </a>` : '')}
                 <a href="/found_items/edit.php?id=${item.id}" class="btn btn-outline-primary btn-sm">
                     <i class="fa-solid fa-pen-to-square"></i> Edit
                 </a>
@@ -2078,6 +2373,24 @@ function renderFoundItemView(id) {
         </div>
 
         ${renderFlash()}
+
+        ${returnedRecord ? `
+        <div class="alert alert-success p-4 mb-4">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="stat-icon-wrapper stat-icon-success" style="width: 46px; height: 46px;">
+                        <i class="fa-solid fa-clipboard-check"></i>
+                    </div>
+                    <div>
+                        <h5 class="font-display fw-semibold mb-0">Item Returned to Owner</h5>
+                        <p class="font-meta small mb-0">
+                            Received by <strong>${esc(returnedRecord.receiver_name)}</strong> on ${fmtDate(returnedRecord.date_returned)}.
+                        </p>
+                    </div>
+                </div>
+                <a href="/returned_items/view.php?id=${returnedRecord.id}" class="btn btn-neutral btn-sm px-3">View Return Proof</a>
+            </div>
+        </div>` : ''}
 
         ${existingMatch && matchedLost ? `
         <div class="alert alert-success p-4 mb-4">
@@ -2325,6 +2638,8 @@ function renderMatchesPage() {
                             ${state.matches.map((m) => {
                               const lost = state.lostItems.find((l) => l.id === m.lost_item_id) || {};
                               const found = state.foundItems.find((f) => f.id === m.found_item_id) || {};
+                              const returnedRow = state.returnedItems.find((r) => r.match_id === m.id || r.lost_item_id === m.lost_item_id || r.found_item_id === m.found_item_id) || null;
+                              const isReturned = !!returnedRow || lost.status === 'returned' || found.status === 'returned';
                               return `
                             <tr>
                                 <td class="ps-4 font-meta fw-bold text-primary">#${m.id}</td>
@@ -2354,15 +2669,12 @@ function renderMatchesPage() {
                                 <td class="small font-meta text-muted text-nowrap">${fmtDateTime(m.created_at)}</td>
                                 <td class="text-end pe-4">
                                     <div class="d-inline-flex align-items-center gap-1">
-                                        ${lost.status !== 'returned' ? `
-                                        <form method="POST" action="/matches/process.php" class="d-inline">
-                                            <input type="hidden" name="action" value="mark_returned">
-                                            <input type="hidden" name="match_id" value="${m.id}">
-                                            <button type="submit" class="btn btn-success btn-sm" title="Mark as Claimed &amp; Returned to Owner">
-                                                <i class="fa-solid fa-check"></i>
-                                                <span>Return</span>
-                                            </button>
-                                        </form>` : `<span class="badge status-badge-claimed">RETURNED</span>`}
+                                        ${!isReturned ? `
+                                        <a href="/returned_items/add.php?match_id=${m.id}" class="btn btn-success btn-sm" title="Record Return with Receiver &amp; Proof Photo">
+                                            <i class="fa-solid fa-check"></i>
+                                            <span>Return</span>
+                                        </a>` : (returnedRow ? `
+                                        <a href="/returned_items/view.php?id=${returnedRow.id}" class="badge status-badge-claimed text-decoration-none" title="View Returned Item Proof">RETURNED</a>` : `<span class="badge status-badge-claimed">RETURNED</span>`)}
                                         <form method="POST" action="/matches/process.php" class="d-inline" data-confirm="Unlink this match and restore item statuses?">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="match_id" value="${m.id}">
@@ -2419,6 +2731,458 @@ function renderMatchesPage() {
         </div>
     </div>`;
   return renderLayout({ title: 'Matches & Claims', activeSection: 'matches', bodyHtml });
+}
+
+function renderReturnedItemsIndex(query) {
+  const search = (query.search || '').trim().toLowerCase();
+  const catFilter = (query.category || '').trim();
+  const perPage = Math.max(1, parseInt(state.settings.items_per_page || '12', 10));
+
+  const filtered = [...state.returnedItems]
+    .sort((a, b) => String(b.date_returned || '').localeCompare(String(a.date_returned || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')) || (b.id - a.id))
+    .filter((item) => {
+      if (search) {
+        const hay = `${item.item_name} ${item.description || ''} ${item.receiver_name || ''} ${item.receiver_contact || ''}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      if (catFilter && String(item.category_id) !== catFilter) return false;
+      return true;
+    });
+
+  const totalItems = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+  let page = Math.max(1, parseInt(query.page || '1', 10) || 1);
+  if (page > totalPages) page = totalPages;
+  const items = filtered.slice((page - 1) * perPage, page * perPage);
+
+  const pageQuery = (p) => `/returned_items/index.php?page=${p}&search=${encodeURIComponent(query.search || '')}&category=${encodeURIComponent(catFilter)}`;
+
+  const renderRetItemThumb = (item) => {
+    if (item && imageFileExists(item.item_image_path)) {
+      return `<img src="/${esc(item.item_image_path)}" alt="${esc(item.item_name)}" class="item-thumb" data-fallback-kind="thumb" data-fallback-icon="fa-solid fa-clipboard-check">`;
+    }
+    return `<div class="item-thumb-placeholder"><i class="fa-solid fa-clipboard-check"></i></div>`;
+  };
+
+  const renderProofThumb = (item) => {
+    if (item && imageFileExists(item.proof_image_path)) {
+      return `<a href="/returned_items/view.php?id=${item.id}" title="View Proof Photo"><img src="/${esc(item.proof_image_path)}" alt="Proof photo for ${esc(item.item_name)}" class="item-thumb" data-fallback-kind="thumb" data-fallback-icon="fa-solid fa-camera"></a>`;
+    }
+    return `<div class="item-thumb-placeholder" title="Proof photo unavailable"><i class="fa-solid fa-camera"></i></div>`;
+  };
+
+  const bodyHtml = `
+    <div class="container-fluid">
+        <div class="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-3 mb-4">
+            <div>
+                <h1 class="h3 fw-semibold mb-1">Returned Items</h1>
+                <p class="font-meta text-muted small mb-0">Official log of items returned to their rightful owners with receiver details and photographic proof.</p>
+            </div>
+            <a href="/returned_items/add.php" class="btn btn-primary px-3 py-2">
+                <i class="fa-solid fa-plus"></i>
+                <span>Record Returned Item</span>
+            </a>
+        </div>
+
+        ${renderFlash()}
+
+        <div class="card mb-4">
+            <div class="card-body p-3 p-md-4">
+                <form method="GET" action="/returned_items/index.php" class="row g-2 g-md-3 align-items-center">
+                    <div class="col-12 col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0 text-muted"><i class="fa-solid fa-magnifying-glass"></i></span>
+                            <input type="text" name="search" class="form-control bg-light border-start-0" placeholder="Search item name, receiver name, contact..." value="${esc(query.search || '')}">
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-4">
+                        <select name="category" class="form-select bg-light">
+                            <option value="">All Categories</option>
+                            ${state.categories.map((c) => `<option value="${c.id}" ${catFilter === String(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary flex-grow-1">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <span>Filter</span>
+                        </button>
+                        <a href="/returned_items/index.php" class="btn btn-secondary" title="Reset Filters"><i class="fa-solid fa-rotate-left"></i></a>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card overflow-hidden">
+            <div class="card-body p-0">
+                ${!items.length ? `
+                <div class="text-center py-5">
+                    <i class="fa-solid fa-clipboard-check fs-1 text-muted"></i>
+                    <h5 class="font-display fw-semibold text-dark mt-3">No returned items recorded yet</h5>
+                    <p class="font-meta text-muted small mb-0">Record a handover with the receiver's name, return date, and proof photo.</p>
+                </div>` : `
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th class="ps-4">Item Details</th>
+                                <th>Category</th>
+                                <th>Received By</th>
+                                <th>Date Returned</th>
+                                <th>Proof Photo</th>
+                                <th>Recorded By</th>
+                                <th class="text-end pe-4">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${items.map((item) => `
+                            <tr>
+                                <td class="ps-4">
+                                    <div class="d-flex align-items-center gap-3">
+                                        ${renderRetItemThumb(item)}
+                                        <div>
+                                            <a href="/returned_items/view.php?id=${item.id}" class="fw-semibold text-dark text-decoration-none">${esc(item.item_name)}</a>
+                                            ${item.description ? `<p class="font-meta text-muted small text-truncate mb-0" style="max-width: 240px;">${esc(item.description)}</p>` : ''}
+                                            ${(item.lost_item_id || item.found_item_id) ? `
+                                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                                ${item.lost_item_id ? `<span class="badge status-badge-claimed" style="font-size: 0.65rem;">Lost #${item.lost_item_id}</span>` : ''}
+                                                ${item.found_item_id ? `<span class="badge status-badge-available" style="font-size: 0.65rem;">Found #${item.found_item_id}</span>` : ''}
+                                            </div>` : ''}
+                                        </div>
+                                    </div>
+                                </td>
+                                <td><span class="category-badge">${esc(getCategoryName(item.category_id))}</span></td>
+                                <td>
+                                    <div class="fw-semibold text-dark small">${esc(item.receiver_name)}</div>
+                                    ${item.receiver_contact ? `<div class="font-meta text-muted small">${esc(item.receiver_contact)}</div>` : ''}
+                                </td>
+                                <td class="small font-meta text-muted text-nowrap">${fmtDate(item.date_returned)}</td>
+                                <td>${renderProofThumb(item)}</td>
+                                <td class="small font-meta text-muted">${esc(getUserName(item.recorded_by))}</td>
+                                <td class="text-end pe-4">
+                                    <div class="d-inline-flex align-items-center gap-1">
+                                        <a href="/returned_items/view.php?id=${item.id}" class="btn btn-view btn-action-icon" title="View return details"><i class="fa-solid fa-eye"></i></a>
+                                        <form method="POST" action="/returned_items/process.php" class="d-inline" data-confirm="Delete this returned item record?">
+                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="id" value="${item.id}">
+                                            <button type="submit" class="btn btn-danger btn-action-icon" title="Delete return record"><i class="fa-solid fa-trash"></i></button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                ${totalPages > 1 ? `
+                <div class="card-footer py-3 px-4 d-flex align-items-center justify-content-between">
+                    <span class="small font-meta text-muted">Showing page ${page} of ${totalPages} (Total: ${totalItems} records)</span>
+                    <nav aria-label="Page navigation">
+                        <ul class="pagination pagination-sm mb-0">
+                            <li class="page-item ${page <= 1 ? 'disabled' : ''}">
+                                <a class="page-link" href="${pageQuery(page - 1)}">Previous</a>
+                            </li>
+                            ${Array.from({ length: totalPages }, (_, idx) => idx + 1).map((p) => `
+                            <li class="page-item ${p === page ? 'active' : ''}">
+                                <a class="page-link" href="${pageQuery(p)}">${p}</a>
+                            </li>`).join('')}
+                            <li class="page-item ${page >= totalPages ? 'disabled' : ''}">
+                                <a class="page-link" href="${pageQuery(page + 1)}">Next</a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>` : ''}`}
+            </div>
+        </div>
+    </div>`;
+
+  return renderLayout({ title: 'Returned Items', activeSection: 'returned_items', bodyHtml });
+}
+
+function renderReturnedItemAddPage(query) {
+  const matchId = parseInt(query.match_id || '0', 10) || 0;
+  let prefillLostId = parseInt(query.lost_item_id || '0', 10) || 0;
+  let prefillFoundId = parseInt(query.found_item_id || '0', 10) || 0;
+  let prefillName = '';
+  let prefillCategoryId = '';
+  let prefillDescription = '';
+  let prefillContact = '';
+
+  if (matchId > 0) {
+    const matchRow = state.matches.find((m) => m.id === matchId);
+    if (matchRow) {
+      const existingRet = state.returnedItems.find(
+        (r) => r.match_id === matchId || r.lost_item_id === matchRow.lost_item_id || r.found_item_id === matchRow.found_item_id
+      );
+      if (existingRet) {
+        return { redirect: `/returned_items/view.php?id=${existingRet.id}`, info: 'This item has already been recorded as returned.' };
+      }
+      const lostRow = state.lostItems.find((l) => l.id === matchRow.lost_item_id);
+      const foundRow = state.foundItems.find((f) => f.id === matchRow.found_item_id);
+      prefillLostId = matchRow.lost_item_id;
+      prefillFoundId = matchRow.found_item_id;
+      prefillName = (foundRow && foundRow.item_name) || (lostRow && lostRow.item_name) || '';
+      prefillCategoryId = String((foundRow && foundRow.category_id) || (lostRow && lostRow.category_id) || '');
+      prefillDescription = (foundRow && foundRow.description) || (lostRow && lostRow.description) || '';
+      prefillContact = (lostRow && lostRow.contact_info) || '';
+    }
+  } else if (prefillFoundId > 0) {
+    const existingRet = state.returnedItems.find((r) => r.found_item_id === prefillFoundId);
+    if (existingRet) {
+      return { redirect: `/returned_items/view.php?id=${existingRet.id}`, info: 'This found item has already been recorded as returned.' };
+    }
+    const foundRow = state.foundItems.find((f) => f.id === prefillFoundId);
+    if (foundRow) {
+      prefillName = foundRow.item_name || '';
+      prefillCategoryId = String(foundRow.category_id || '');
+      prefillDescription = foundRow.description || '';
+    }
+  } else if (prefillLostId > 0) {
+    const existingRet = state.returnedItems.find((r) => r.lost_item_id === prefillLostId);
+    if (existingRet) {
+      return { redirect: `/returned_items/view.php?id=${existingRet.id}`, info: 'This lost item has already been recorded as returned.' };
+    }
+    const lostRow = state.lostItems.find((l) => l.id === prefillLostId);
+    if (lostRow) {
+      prefillName = lostRow.item_name || '';
+      prefillCategoryId = String(lostRow.category_id || '');
+      prefillDescription = lostRow.description || '';
+      prefillContact = lostRow.contact_info || '';
+    }
+  }
+
+  const returnedLostIds = new Set(state.returnedItems.map((r) => r.lost_item_id).filter(Boolean));
+  const returnedFoundIds = new Set(state.returnedItems.map((r) => r.found_item_id).filter(Boolean));
+  const availableLostItems = state.lostItems
+    .filter((l) => ['open', 'matched'].includes(l.status) && !returnedLostIds.has(l.id))
+    .sort((a, b) => b.id - a.id);
+  const availableFoundItems = state.foundItems
+    .filter((f) => ['available', 'matched'].includes(f.status) && !returnedFoundIds.has(f.id))
+    .sort((a, b) => b.id - a.id);
+
+  const bodyHtml = `
+    <div class="container-fluid" style="max-width: 920px;">
+        <div class="mb-4">
+            <a href="/returned_items/index.php" class="font-meta text-decoration-none text-muted small d-inline-flex align-items-center gap-2 mb-2">
+                <i class="fa-solid fa-arrow-left"></i> Back to Returned Items
+            </a>
+            <h1 class="h3 fw-semibold mb-1">Record Returned Item</h1>
+            <p class="font-meta text-muted small mb-0">Log a verified handover with the receiver's name, return date, and proof photo.</p>
+        </div>
+
+        ${renderFlash()}
+
+        <div class="card">
+            <div class="card-body p-4 p-md-5">
+                <form method="POST" action="/returned_items/process.php" enctype="multipart/form-data" class="needs-validation" novalidate>
+                    <input type="hidden" name="action" value="create">
+                    <input type="hidden" name="match_id" value="${matchId > 0 ? matchId : ''}">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <label for="foundItemSelect" class="form-label small">Link Found Item Record (Optional)</label>
+                            <select class="form-select" id="foundItemSelect" name="found_item_id" data-return-link-select>
+                                <option value="">None / Standalone Return</option>
+                                ${availableFoundItems.map((fi) => `<option value="${fi.id}" data-item-name="${esc(fi.item_name)}" data-category-id="${fi.category_id || 0}" data-description="${esc(fi.description)}" ${prefillFoundId === fi.id ? 'selected' : ''}>#${fi.id} - ${esc(fi.item_name)} (${esc(fi.storage_location)})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="lostItemSelect" class="form-label small">Link Lost Item Report (Optional)</label>
+                            <select class="form-select" id="lostItemSelect" name="lost_item_id" data-return-link-select>
+                                <option value="">None / Walk-in Claim</option>
+                                ${availableLostItems.map((li) => `<option value="${li.id}" data-item-name="${esc(li.item_name)}" data-category-id="${li.category_id || 0}" data-description="${esc(li.description)}" data-contact="${esc(li.contact_info)}" ${prefillLostId === li.id ? 'selected' : ''}>#${li.id} - ${esc(li.item_name)} (${fmtDate(li.date_lost)})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-8">
+                            <label for="returnItemName" class="form-label small">Item Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="returnItemName" name="item_name" value="${esc(prefillName)}" placeholder="e.g., iPhone 15 Pro, Campus ID Card, Leather Wallet" required>
+                            <div class="invalid-feedback">Please provide the returned item name.</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <label for="returnCategoryId" class="form-label small">Category <span class="text-danger">*</span></label>
+                            <select class="form-select" id="returnCategoryId" name="category_id" required>
+                                <option value="">Select Category...</option>
+                                ${state.categories.map((c) => `<option value="${c.id}" ${prefillCategoryId && Number(prefillCategoryId) === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+                            </select>
+                            <div class="invalid-feedback">Please select a category.</div>
+                        </div>
+                        <div class="col-12">
+                            <label for="returnDescription" class="form-label small">Item Description</label>
+                            <textarea class="form-control" id="returnDescription" name="description" rows="3" placeholder="Color, brand, serial marks, or condition at handover...">${esc(prefillDescription)}</textarea>
+                        </div>
+                        <div class="col-12 col-md-5">
+                            <label for="receiverName" class="form-label small">Receiver Name (Claimant) <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="receiverName" name="receiver_name" placeholder="Full name of person receiving item" required>
+                            <div class="invalid-feedback">Please enter the receiver's full name.</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <label for="receiverContact" class="form-label small">Receiver Contact / ID</label>
+                            <input type="text" class="form-control" id="receiverContact" name="receiver_contact" value="${esc(prefillContact)}" placeholder="Email, phone, or student ID">
+                        </div>
+                        <div class="col-12 col-md-3">
+                            <label for="dateReturned" class="form-label small">Date Returned <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" id="dateReturned" name="date_returned" value="${todayStr()}" required>
+                            <div class="invalid-feedback">Please select the return date.</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="returnedItemImage" class="form-label small">Item Photo (Optional)</label>
+                            <input type="file" class="form-control" id="returnedItemImage" name="item_image" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+                            <div class="form-text small">Leave empty to keep the linked Lost/Found photo if available.</div>
+                            <div class="image-upload-preview-card mt-2 d-none" data-image-preview-box></div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="proofImage" class="form-label small">Proof of Return Photo <span class="text-danger">*</span></label>
+                            <input type="file" class="form-control" id="proofImage" name="proof_image" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" required>
+                            <div class="form-text small">Handover photo or signed release evidence (JPG, PNG, WEBP, Max 5MB).</div>
+                            <div class="invalid-feedback">Please upload a proof photo showing the return handover.</div>
+                            <div class="image-upload-preview-card mt-2 d-none" data-image-preview-box></div>
+                        </div>
+                        <div class="col-12">
+                            <label for="returnNotes" class="form-label small">Handover Notes (Optional)</label>
+                            <textarea class="form-control" id="returnNotes" name="notes" rows="2" placeholder="Verification ID checked, remarks during release..."></textarea>
+                        </div>
+                    </div>
+                    <hr class="my-4">
+                    <div class="d-flex justify-content-end gap-2">
+                        <a href="/returned_items/index.php" class="btn btn-secondary px-4">Cancel</a>
+                        <button type="submit" class="btn btn-primary px-4">Save Return Record</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>`;
+  return { html: renderLayout({ title: 'Record Returned Item', activeSection: 'returned_items', bodyHtml }) };
+}
+
+function renderReturnedItemView(id) {
+  const item = state.returnedItems.find((r) => r.id === Number(id));
+  if (!item) return null;
+  const linkedLost = item.lost_item_id ? state.lostItems.find((l) => l.id === item.lost_item_id) : null;
+  const linkedFound = item.found_item_id ? state.foundItems.find((f) => f.id === item.found_item_id) : null;
+
+  const proofHtml = imageFileExists(item.proof_image_path)
+    ? `<img src="/${esc(item.proof_image_path)}" alt="Proof of return for ${esc(item.item_name)}" class="item-detail-image" data-fallback-kind="detail" data-fallback-icon="fa-solid fa-camera" data-fallback-text="Proof photo unavailable">`
+    : `<div class="bg-light text-muted p-5 text-center"><i class="fa-solid fa-camera fs-1 d-block mb-2 text-secondary"></i><span class="font-meta small">Proof photo unavailable</span></div>`;
+
+  const itemImgHtml = imageFileExists(item.item_image_path)
+    ? `<img src="/${esc(item.item_image_path)}" alt="${esc(item.item_name)}" class="item-detail-image" data-fallback-kind="detail" data-fallback-icon="fa-regular fa-image" data-fallback-text="No item photo provided">`
+    : `<div class="bg-light text-muted p-5 text-center"><i class="fa-regular fa-image fs-1 d-block mb-2 text-secondary"></i><span class="font-meta small">No item photo provided</span></div>`;
+
+  const bodyHtml = `
+    <div class="container-fluid" style="max-width: 1050px;">
+        <div class="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-3 mb-4">
+            <div>
+                <a href="/returned_items/index.php" class="font-meta text-decoration-none text-muted small d-inline-flex align-items-center gap-2 mb-2">
+                    <i class="fa-solid fa-arrow-left"></i> Back to Returned Items
+                </a>
+                <h1 class="h3 fw-semibold mb-2">${esc(item.item_name)}</h1>
+                <span class="badge status-badge-claimed">STATUS: RETURNED TO OWNER</span>
+            </div>
+            <div class="d-flex gap-2">
+                <form method="POST" action="/returned_items/process.php" data-confirm="Delete this returned item record?">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="id" value="${item.id}">
+                    <button type="submit" class="btn btn-danger btn-sm">
+                        <i class="fa-solid fa-trash"></i> Delete
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        ${renderFlash()}
+
+        <div class="row g-4">
+            <div class="col-12 col-lg-7">
+                <div class="card mb-4">
+                    <div class="card-body p-4">
+                        <h5 class="font-display fw-semibold mb-3">Return Handover Details</h5>
+                        <div class="row g-3 mb-4">
+                            <div class="col-sm-6">
+                                <small class="font-meta text-muted text-uppercase fw-bold" style="font-size: 0.7rem;">Received By</small>
+                                <div class="fw-semibold text-dark mt-1"><i class="fa-solid fa-user-check me-1 text-success"></i>${esc(item.receiver_name)}</div>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="font-meta text-muted text-uppercase fw-bold" style="font-size: 0.7rem;">Date Returned</small>
+                                <div class="fw-semibold text-dark mt-1"><i class="fa-solid fa-calendar-days me-1 text-primary"></i>${fmtDate(item.date_returned)}</div>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="font-meta text-muted text-uppercase fw-bold" style="font-size: 0.7rem;">Category</small>
+                                <div class="fw-semibold text-dark mt-1">${esc(getCategoryName(item.category_id))}</div>
+                            </div>
+                            <div class="col-sm-6">
+                                <small class="font-meta text-muted text-uppercase fw-bold" style="font-size: 0.7rem;">Receiver Contact / ID</small>
+                                <div class="fw-semibold text-dark mt-1">${esc(item.receiver_contact || '—')}</div>
+                            </div>
+                        </div>
+
+                        <h6 class="fw-semibold text-dark mb-2">Item Description</h6>
+                        <div class="p-3 bg-light rounded-3 text-secondary mb-4 border">
+                            ${item.description ? esc(item.description) : 'No description provided.'}
+                        </div>
+
+                        ${item.notes ? `
+                        <h6 class="fw-semibold text-dark mb-2">Handover Notes</h6>
+                        <div class="p-3 bg-light rounded-3 text-secondary small border mb-4">
+                            <i class="fa-solid fa-note-sticky me-1 text-primary"></i> ${esc(item.notes)}
+                        </div>` : ''}
+
+                        ${(item.lost_item_id || item.found_item_id) ? `
+                        <h6 class="fw-semibold text-dark mb-2">Linked Registry Records</h6>
+                        <div class="d-flex flex-wrap gap-2">
+                            ${item.lost_item_id ? `
+                            <a href="/lost_items/view.php?id=${item.lost_item_id}" class="btn btn-soft-primary btn-sm">
+                                <i class="fa-solid fa-circle-question me-1"></i>
+                                Lost Item #${item.lost_item_id}${linkedLost ? ` (${esc(linkedLost.item_name)})` : ''}
+                            </a>` : ''}
+                            ${item.found_item_id ? `
+                            <a href="/found_items/view.php?id=${item.found_item_id}" class="btn btn-soft-primary btn-sm">
+                                <i class="fa-solid fa-box-open me-1"></i>
+                                Found Item #${item.found_item_id}${linkedFound ? ` (${esc(linkedFound.item_name)})` : ''}
+                            </a>` : ''}
+                        </div>` : ''}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-body p-4">
+                        <h6 class="font-display fw-semibold text-dark mb-3">Audit Details</h6>
+                        <ul class="list-unstyled mb-0 small font-meta text-muted">
+                            <li class="d-flex justify-content-between py-2 border-bottom">
+                                <span>Return Log ID</span>
+                                <span class="fw-bold text-dark">#${item.id}</span>
+                            </li>
+                            <li class="d-flex justify-content-between py-2 border-bottom">
+                                <span>Recorded By</span>
+                                <span class="fw-semibold text-dark">${esc(getUserName(item.recorded_by))}</span>
+                            </li>
+                            <li class="d-flex justify-content-between py-2">
+                                <span>Logged At</span>
+                                <span>${fmtDateTime(item.created_at)}</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-lg-5">
+                <div class="card mb-4 overflow-hidden">
+                    <div class="card-header py-3 px-4">
+                        <h6 class="font-display fw-semibold mb-0 fs-6">
+                            <i class="fa-solid fa-camera text-success me-1"></i> Proof of Return Photo
+                        </h6>
+                    </div>
+                    ${proofHtml}
+                </div>
+                <div class="card overflow-hidden">
+                    <div class="card-header py-3 px-4">
+                        <h6 class="font-display fw-semibold mb-0 fs-6">
+                            <i class="fa-regular fa-image text-primary me-1"></i> Item Photo
+                        </h6>
+                    </div>
+                    ${itemImgHtml}
+                </div>
+            </div>
+        </div>
+    </div>`;
+
+  return renderLayout({ title: `Returned Item: ${item.item_name}`, activeSection: 'returned_items', bodyHtml });
 }
 
 function renderManageUsersPage() {
@@ -3024,8 +3788,8 @@ function renderNotificationsPage() {
   const latestId = notifications.reduce((max, n) => Math.max(max, n.id), 0);
 
   const emptyNote = u.role === 'admin'
-    ? 'You will be notified automatically whenever staff operators add a new Lost Item or Found Item.'
-    : 'You will be notified automatically whenever administrators add a new Lost Item or Found Item.';
+    ? 'You will be notified automatically whenever staff operators add a new Lost, Found, or Returned Item.'
+    : 'You will be notified automatically whenever administrators add a new Lost, Found, or Returned Item.';
 
   const listHtml = !notifications.length ? `
     <div class="card">
@@ -3040,8 +3804,9 @@ function renderNotificationsPage() {
     <div class="notification-list">
         ${notifications.map((n) => {
           const isRead = !!n.is_read;
-          const isFound = n.related_item_type === 'found_item';
-          const iconClass = isFound ? 'fa-box-open' : 'fa-circle-question';
+          const iconClass = n.related_item_type === 'found_item'
+            ? 'fa-box-open'
+            : (n.related_item_type === 'returned_item' ? 'fa-clipboard-check' : 'fa-circle-question');
           const roleClass = n.sender_role === 'admin' ? 'role-badge-admin' : 'role-badge-staff';
           return `
         <div class="notification-card ${isRead ? 'is-read' : 'is-unread'}" data-notification-id="${n.id}">
@@ -3150,6 +3915,19 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Block direct access to internal config/database/helper files
+    if (
+      reqPath === '/recovery_config.php' ||
+      reqPath.startsWith('/config/') ||
+      reqPath.startsWith('/database/') ||
+      reqPath.startsWith('/includes/') ||
+      reqPath.startsWith('/setup/')
+    ) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Direct access forbidden.');
+      return;
+    }
+
     // Serve static assets (css, js, images)
     if (reqPath.startsWith('/assets/') || reqPath.startsWith('/uploads/') || reqPath.startsWith('/picture/')) {
       const resolvedPath = path.resolve(__dirname, '.' + reqPath);
@@ -3209,7 +3987,7 @@ const server = http.createServer(async (req, res) => {
             return res.end(renderLoginPage('Please enter both username and password.', username));
           }
           const user = state.users.find((u) => u.username === username);
-          if (!user || user.password !== password) {
+          if (!user || !verifyPassword(password, user)) {
             logActivity('FAILED_LOGIN', 'users', null, `Failed login attempt for username: ${username}`);
             saveState();
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -3244,6 +4022,65 @@ const server = http.createServer(async (req, res) => {
         queueCookie(res, buildCookieString(req, PROBE_COOKIE, '1', { maxAgeSec: 86400, httpOnly: false }));
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(renderLoginPage());
+      }
+
+      // Staff Password Recovery Page
+      if (reqPath === '/reset_password.php') {
+        if (req.method === 'POST') {
+          const body = await parseBody(req);
+          const username = (body.username || '').trim();
+          const recoveryCode = (body.recovery_code || '').trim();
+          const newPassword = body.new_password || '';
+          const confirmPassword = body.confirm_password || '';
+          const expectedCode = getRecoveryCode();
+
+          const codeBuf = Buffer.from(recoveryCode, 'utf8');
+          const expectedBuf = Buffer.from(expectedCode, 'utf8');
+          const codeMatches = expectedCode.length > 0 && codeBuf.length === expectedBuf.length && crypto.timingSafeEqual(codeBuf, expectedBuf);
+
+          let errMsg = '';
+          let okMsg = '';
+          let uVal = username;
+
+          if (!username || !recoveryCode || !newPassword || !confirmPassword) {
+            errMsg = 'Please complete all fields to reset your password.';
+          } else if (newPassword.length < 6) {
+            errMsg = 'New password must be at least 6 characters long.';
+          } else if (newPassword !== confirmPassword) {
+            errMsg = 'New password and confirmation password do not match.';
+          } else if (!codeMatches) {
+            errMsg = 'Invalid recovery code. Please contact your system administrator.';
+            logActivity('FAILED_PASSWORD_RESET', 'users', null, `Failed staff password reset (invalid recovery code) for username: ${username}`);
+            saveState();
+          } else {
+            const targetUser = state.users.find((u) => u.username === username);
+            if (!targetUser) {
+              errMsg = 'No staff account matched that username and recovery code.';
+              logActivity('FAILED_PASSWORD_RESET', 'users', null, `Failed staff password reset (nonexistent username: ${username})`);
+              saveState();
+            } else if (targetUser.role !== 'staff') {
+              errMsg = 'Self-service recovery with a staff recovery code is restricted to active staff accounts.';
+              logActivity('FAILED_PASSWORD_RESET', 'users', targetUser.id, `Blocked non-staff password reset attempt for @${username}`);
+              saveState();
+            } else if (targetUser.status !== 'active') {
+              errMsg = 'Your account is currently inactive. Please contact an administrator.';
+              logActivity('FAILED_PASSWORD_RESET', 'users', targetUser.id, `Blocked inactive staff password reset for @${username}`);
+              saveState();
+            } else {
+              targetUser.password_hash = hashPassword(newPassword);
+              delete targetUser.password;
+              targetUser.updated_at = nowStr();
+              logActivity('STAFF_PASSWORD_RESET', 'users', targetUser.id, `Staff password reset completed for @${targetUser.username}`);
+              saveState();
+              okMsg = 'Your password has been reset successfully. You can now sign in with your new password.';
+              uVal = '';
+            }
+          }
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          return res.end(renderResetPasswordPage(errMsg, okMsg, uVal));
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(renderResetPasswordPage());
       }
 
     // Root entry point: open system at login when unauthenticated, dashboard when logged in
@@ -3323,7 +4160,7 @@ const server = http.createServer(async (req, res) => {
       const newItem = {
         id: state.nextIds.lost++,
         item_name: itemName,
-        category_id: Number(body.category_id) || 10,
+        category_id: resolveValidCategoryId(body.category_id, 10),
         description,
         date_lost: dateLost,
         location_lost: locationLost,
@@ -3365,7 +4202,7 @@ const server = http.createServer(async (req, res) => {
 
       const oldImage = item.image_path;
       item.item_name = itemName;
-      item.category_id = Number(body.category_id) || item.category_id;
+      item.category_id = resolveValidCategoryId(body.category_id, item.category_id);
       item.date_lost = dateLost;
       item.location_lost = locationLost;
       item.description = description;
@@ -3391,6 +4228,10 @@ const server = http.createServer(async (req, res) => {
       }
       state.lostItems = state.lostItems.filter((i) => i.id !== id);
       state.matches = state.matches.filter((m) => m.lost_item_id !== id);
+      state.notifications = state.notifications.filter((n) => !(n.related_item_type === 'lost_item' && n.related_item_id === id));
+      for (const r of state.returnedItems) {
+        if (r.lost_item_id === id) r.lost_item_id = null;
+      }
       logActivity('DELETE_LOST_ITEM', 'lost_items', id, `Deleted lost item record #${id}`);
       saveState();
       setFlash('success', 'Lost item record deleted.');
@@ -3451,7 +4292,7 @@ const server = http.createServer(async (req, res) => {
       const newItem = {
         id: state.nextIds.found++,
         item_name: itemName,
-        category_id: Number(body.category_id) || 10,
+        category_id: resolveValidCategoryId(body.category_id, 10),
         description,
         date_found: dateFound,
         location_found: locationFound,
@@ -3494,7 +4335,7 @@ const server = http.createServer(async (req, res) => {
 
       const oldImage = item.image_path;
       item.item_name = itemName;
-      item.category_id = Number(body.category_id) || item.category_id;
+      item.category_id = resolveValidCategoryId(body.category_id, item.category_id);
       item.date_found = dateFound;
       item.location_found = locationFound;
       item.storage_location = storageLocation;
@@ -3521,12 +4362,215 @@ const server = http.createServer(async (req, res) => {
       }
       state.foundItems = state.foundItems.filter((i) => i.id !== id);
       state.matches = state.matches.filter((m) => m.found_item_id !== id);
+      state.notifications = state.notifications.filter((n) => !(n.related_item_type === 'found_item' && n.related_item_id === id));
+      for (const r of state.returnedItems) {
+        if (r.found_item_id === id) r.found_item_id = null;
+      }
       logActivity('DELETE_FOUND_ITEM', 'found_items', id, `Deleted found item record #${id}`);
       saveState();
       setFlash('success', 'Found item record deleted.');
       return redirect(res, '/found_items/index.php');
     }
     return redirect(res, '/found_items/index.php');
+  }
+
+  // Returned Items
+  if (reqPath === '/returned_items/index.php') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(renderReturnedItemsIndex(query));
+  }
+  if (reqPath === '/returned_items/add.php') {
+    const out = renderReturnedItemAddPage(query);
+    if (out.redirect) {
+      if (out.info) setFlash('info', out.info);
+      return redirect(res, out.redirect);
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(out.html);
+  }
+  if (reqPath === '/returned_items/view.php') {
+    const html = renderReturnedItemView(query.id);
+    if (!html) {
+      setFlash('error', 'Returned item record not found.');
+      return redirect(res, '/returned_items/index.php');
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(html);
+  }
+  if (reqPath === '/returned_items/process.php') {
+    if (req.method !== 'POST') {
+      return redirect(res, '/returned_items/index.php');
+    }
+    const body = await parseBody(req);
+    const action = body.action || '';
+    if (action === 'create') {
+      let matchId = Number(body.match_id || 0) || null;
+      let lostItemId = Number(body.lost_item_id || 0) || null;
+      let foundItemId = Number(body.found_item_id || 0) || null;
+      const itemName = (body.item_name || '').trim();
+      const receiverName = (body.receiver_name || '').trim();
+      const receiverContact = (body.receiver_contact || '').trim();
+      const dateReturned = (body.date_returned || '').trim();
+      const description = (body.description || '').trim();
+      const notes = (body.notes || '').trim();
+
+      const backParams = [];
+      if (matchId) backParams.push(`match_id=${matchId}`);
+      if (lostItemId) backParams.push(`lost_item_id=${lostItemId}`);
+      if (foundItemId) backParams.push(`found_item_id=${foundItemId}`);
+      const backUrl = `/returned_items/add.php${backParams.length ? '?' + backParams.join('&') : ''}`;
+
+      if (!itemName || !receiverName || !dateReturned || !/^\d{4}-\d{2}-\d{2}$/.test(dateReturned)) {
+        setFlash('error', 'Please enter the item name, receiver name, and a valid return date.');
+        return redirect(res, backUrl);
+      }
+
+      const proofFile = body._files && body._files.proof_image;
+      if (!proofFile || (!proofFile.filename && !proofFile.size)) {
+        setFlash('error', 'Please upload a proof photo showing the return handover.');
+        return redirect(res, backUrl);
+      }
+      const proofUpload = saveUploadedImage(proofFile);
+      if (!proofUpload.ok || !proofUpload.path) {
+        setFlash('error', proofUpload.error || 'Invalid proof photo. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB).');
+        return redirect(res, backUrl);
+      }
+
+      let itemImagePath = null;
+      const itemFile = body._files && body._files.item_image;
+      if (itemFile && (itemFile.filename || itemFile.size > 0)) {
+        const itemUpload = saveUploadedImage(itemFile);
+        if (!itemUpload.ok) {
+          deleteUploadedImage(proofUpload.path);
+          setFlash('error', itemUpload.error || 'Invalid item photo. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB).');
+          return redirect(res, backUrl);
+        }
+        itemImagePath = itemUpload.path;
+      }
+
+      if (matchId) {
+        const mRow = state.matches.find((m) => m.id === matchId);
+        if (mRow) {
+          if (!lostItemId) lostItemId = mRow.lost_item_id;
+          if (!foundItemId) foundItemId = mRow.found_item_id;
+        } else {
+          matchId = null;
+        }
+      }
+
+      let linkedLost = null;
+      if (lostItemId) {
+        linkedLost = state.lostItems.find((l) => l.id === lostItemId) || null;
+        if (!linkedLost) {
+          deleteUploadedImage(proofUpload.path);
+          deleteUploadedImage(itemImagePath);
+          setFlash('error', 'Selected lost item record was not found.');
+          return redirect(res, backUrl);
+        }
+        if (state.returnedItems.some((r) => r.lost_item_id === lostItemId) || linkedLost.status === 'returned') {
+          deleteUploadedImage(proofUpload.path);
+          deleteUploadedImage(itemImagePath);
+          setFlash('error', 'This lost item has already been marked as returned.');
+          return redirect(res, '/returned_items/index.php');
+        }
+      }
+
+      let linkedFound = null;
+      if (foundItemId) {
+        linkedFound = state.foundItems.find((f) => f.id === foundItemId) || null;
+        if (!linkedFound) {
+          deleteUploadedImage(proofUpload.path);
+          deleteUploadedImage(itemImagePath);
+          setFlash('error', 'Selected found item record was not found.');
+          return redirect(res, backUrl);
+        }
+        if (state.returnedItems.some((r) => r.found_item_id === foundItemId) || linkedFound.status === 'returned') {
+          deleteUploadedImage(proofUpload.path);
+          deleteUploadedImage(itemImagePath);
+          setFlash('error', 'This found item has already been recorded as returned.');
+          return redirect(res, '/returned_items/index.php');
+        }
+      }
+
+      if (matchId && state.returnedItems.some((r) => r.match_id === matchId)) {
+        deleteUploadedImage(proofUpload.path);
+        deleteUploadedImage(itemImagePath);
+        setFlash('error', 'This matched item has already been recorded as returned.');
+        return redirect(res, '/returned_items/index.php');
+      }
+
+      if (!itemImagePath) {
+        if (linkedFound && linkedFound.image_path) {
+          itemImagePath = copyUploadedImage(linkedFound.image_path, 'retitem_');
+        }
+        if (!itemImagePath && linkedLost && linkedLost.image_path) {
+          itemImagePath = copyUploadedImage(linkedLost.image_path, 'retitem_');
+        }
+      }
+
+      const newReturn = {
+        id: state.nextIds.returned++,
+        lost_item_id: lostItemId,
+        found_item_id: foundItemId,
+        match_id: matchId,
+        item_name: itemName,
+        category_id: resolveValidCategoryId(body.category_id, null),
+        description: description || null,
+        item_image_path: itemImagePath,
+        receiver_name: receiverName,
+        receiver_contact: receiverContact || null,
+        date_returned: dateReturned,
+        proof_image_path: proofUpload.path,
+        notes: notes || null,
+        recorded_by: currentUser().id,
+        created_at: nowStr(),
+      };
+      state.returnedItems.unshift(newReturn);
+
+      if (linkedLost) {
+        linkedLost.status = 'returned';
+        linkedLost.updated_at = nowStr();
+      }
+      if (linkedFound) {
+        linkedFound.status = 'returned';
+        linkedFound.updated_at = nowStr();
+      }
+
+      createRoleItemNotifications(currentUser(), 'returned_item', newReturn.id);
+      logActivity('CREATE_RETURNED_ITEM', 'returned_items', newReturn.id, `Recorded return of '${itemName}' to ${receiverName}`);
+      saveState();
+      setFlash('success', `Return record for '${itemName}' saved successfully.`);
+      return redirect(res, '/returned_items/index.php');
+    }
+    if (action === 'delete') {
+      const id = Number(body.id || 0);
+      const target = state.returnedItems.find((r) => r.id === id);
+      if (target) {
+        if (target.proof_image_path) deleteUploadedImage(target.proof_image_path);
+        if (target.item_image_path) deleteUploadedImage(target.item_image_path);
+        if (target.lost_item_id) {
+          const l = state.lostItems.find((x) => x.id === target.lost_item_id);
+          if (l && l.status === 'returned') {
+            l.status = state.matches.some((m) => m.lost_item_id === l.id) ? 'matched' : 'open';
+            l.updated_at = nowStr();
+          }
+        }
+        if (target.found_item_id) {
+          const f = state.foundItems.find((x) => x.id === target.found_item_id);
+          if (f && f.status === 'returned') {
+            f.status = state.matches.some((m) => m.found_item_id === f.id) ? 'matched' : 'available';
+            f.updated_at = nowStr();
+          }
+        }
+        state.returnedItems = state.returnedItems.filter((r) => r.id !== id);
+        state.notifications = state.notifications.filter((n) => !(n.related_item_type === 'returned_item' && n.related_item_id === id));
+        logActivity('DELETE_RETURNED_ITEM', 'returned_items', id, `Deleted returned item record #${id}`);
+        saveState();
+        setFlash('success', 'Returned item record deleted.');
+      }
+      return redirect(res, '/returned_items/index.php');
+    }
+    return redirect(res, '/returned_items/index.php');
   }
 
   // Matches
@@ -3569,15 +4613,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (action === 'mark_returned') {
       const matchId = Number(body.match_id || 0);
-      const match = state.matches.find((m) => m.id === matchId);
-      if (match) {
-        const lost = state.lostItems.find((l) => l.id === match.lost_item_id);
-        const found = state.foundItems.find((f) => f.id === match.found_item_id);
-        if (lost) { lost.status = 'returned'; lost.updated_at = nowStr(); }
-        if (found) { found.status = 'returned'; found.updated_at = nowStr(); }
-        logActivity('RETURN_ITEM', 'matches', matchId, `Marked match #${matchId} as claimed & returned to owner`);
-        saveState();
-        setFlash('success', 'Item marked as successfully returned to owner.');
+      if (matchId > 0) {
+        const existingRet = state.returnedItems.find((r) => r.match_id === matchId);
+        if (existingRet) {
+          setFlash('info', 'This matched item has already been recorded as returned.');
+          return redirect(res, `/returned_items/view.php?id=${existingRet.id}`);
+        }
+        return redirect(res, `/returned_items/add.php?match_id=${matchId}`);
       }
       return redirect(res, '/matches/index.php');
     }
@@ -3590,6 +4632,9 @@ const server = http.createServer(async (req, res) => {
         if (lost && lost.status === 'matched') { lost.status = 'open'; lost.updated_at = nowStr(); }
         if (found && found.status === 'matched') { found.status = 'available'; found.updated_at = nowStr(); }
         state.matches = state.matches.filter((m) => m.id !== matchId);
+        for (const r of state.returnedItems) {
+          if (r.match_id === matchId) r.match_id = null;
+        }
         logActivity('DELETE_MATCH', 'matches', matchId, `Unlinked match #${matchId}`);
         saveState();
         setFlash('success', 'Match unlinked. Items restored to open/available status.');
@@ -3622,9 +4667,11 @@ const server = http.createServer(async (req, res) => {
         if (!curr || !next) setFlash('error', 'Please fill in all password fields.');
         else if (next !== conf) setFlash('error', 'New password and confirmation do not match.');
         else if (next.length < 6) setFlash('error', 'New password must be at least 6 characters.');
-        else if (curr !== u.password) setFlash('error', 'Current password is incorrect.');
+        else if (!verifyPassword(curr, u)) setFlash('error', 'Current password is incorrect.');
         else {
-          u.password = next;
+          u.password_hash = hashPassword(next);
+          delete u.password;
+          u.updated_at = nowStr();
           logActivity('CHANGE_PASSWORD', 'users', u.id, 'Updated account security password');
           saveState();
           setFlash('success', 'Password updated successfully.');
@@ -3717,7 +4764,9 @@ const server = http.createServer(async (req, res) => {
       saveState();
       const targetUrl = notif.related_item_type === 'found_item'
         ? `/found_items/view.php?id=${notif.related_item_id}`
-        : `/lost_items/view.php?id=${notif.related_item_id}`;
+        : (notif.related_item_type === 'returned_item'
+          ? `/returned_items/view.php?id=${notif.related_item_id}`
+          : `/lost_items/view.php?id=${notif.related_item_id}`);
       return redirect(res, targetUrl);
     }
 
@@ -3766,6 +4815,8 @@ const server = http.createServer(async (req, res) => {
           const role = body.role === 'admin' ? 'admin' : 'staff';
           if (!fullName || !username || !password) {
             setFlash('error', 'Please fill in all required user fields.');
+          } else if (password.length < 6) {
+            setFlash('error', 'Password must be at least 6 characters long.');
           } else if (state.users.some((x) => x.username === username)) {
             setFlash('error', 'Failed to create user (username already exists).');
           } else {
@@ -3774,7 +4825,7 @@ const server = http.createServer(async (req, res) => {
               full_name: fullName,
               username,
               email,
-              password,
+              password_hash: hashPassword(password),
               role,
               status: 'active',
               last_login: null,
@@ -3804,6 +4855,7 @@ const server = http.createServer(async (req, res) => {
             setFlash('error', 'You cannot delete your own account.');
           } else {
             state.users = state.users.filter((x) => x.id !== uid);
+            state.notifications = state.notifications.filter((n) => n.recipient_user_id !== uid && n.sender_user_id !== uid);
             logActivity('DELETE_USER', 'users', uid, `Deleted user #${uid}`);
             saveState();
             setFlash('success', 'User account deleted successfully.');
@@ -3832,8 +4884,39 @@ const server = http.createServer(async (req, res) => {
     }
     if (reqPath === '/admin/backup_recovery.php') {
       if (query.download === 'sql') {
+        const sqlEsc = (val) => (val === null || val === undefined)
+          ? 'NULL'
+          : `'${String(val).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '\\r').replace(/\n/g, '\\n')}'`;
+        const sqlHeader = [
+          '-- FoundU Live SQL Snapshot',
+          `-- Generated At: ${nowStr()}`,
+          'SET FOREIGN_KEY_CHECKS=0;',
+          '',
+        ];
+        const dumpRows = (table, cols, rows) => {
+          if (!rows.length) return [`-- Table \`${table}\` has 0 rows`, ''];
+          const lines = [`-- Table \`${table}\` (${rows.length} rows)`];
+          for (const r of rows) {
+            const vals = cols.map((c) => sqlEsc(r[c]));
+            lines.push(`INSERT INTO \`${table}\` (\`${cols.join('`, `')}\`) VALUES (${vals.join(', ')});`);
+          }
+          lines.push('');
+          return lines;
+        };
         const sqlFile = path.join(__dirname, 'database', 'lost_and_found_db.sql');
-        const dump = fs.existsSync(sqlFile) ? fs.readFileSync(sqlFile, 'utf8') : '-- FoundU SQL Backup\n';
+        const schemaNote = fs.existsSync(sqlFile) ? '-- Base schema reference: database/lost_and_found_db.sql\n' : '';
+        const dump = [
+          ...sqlHeader,
+          schemaNote,
+          ...dumpRows('categories', ['id', 'name'], state.categories),
+          ...dumpRows('lost_items', ['id', 'item_name', 'category_id', 'description', 'date_lost', 'location_lost', 'contact_info', 'image_path', 'status', 'reported_by', 'created_at', 'updated_at'], state.lostItems),
+          ...dumpRows('found_items', ['id', 'item_name', 'category_id', 'description', 'date_found', 'location_found', 'storage_location', 'notes', 'image_path', 'status', 'recorded_by', 'created_at', 'updated_at'], state.foundItems),
+          ...dumpRows('matches', ['id', 'lost_item_id', 'found_item_id', 'confirmed_by', 'notes', 'created_at'], state.matches),
+          ...dumpRows('returned_items', ['id', 'lost_item_id', 'found_item_id', 'match_id', 'item_name', 'category_id', 'description', 'item_image_path', 'receiver_name', 'receiver_contact', 'date_returned', 'proof_image_path', 'notes', 'recorded_by', 'created_at'], state.returnedItems),
+          ...dumpRows('notifications', ['id', 'recipient_user_id', 'sender_user_id', 'sender_role', 'related_item_id', 'related_item_type', 'title', 'message', 'is_read', 'read_at', 'created_at'], state.notifications),
+          'SET FOREIGN_KEY_CHECKS=1;',
+          '',
+        ].join('\n');
         const filename = `foundu_backup_${todayStr()}.sql`;
         const bLog = {
           id: state.nextIds.backup++,

@@ -57,7 +57,7 @@ require_once __DIR__ . '/../includes/navbar.php';
 
                             <div class="col-12 col-md-6">
                                 <label for="dateLost" class="form-label small">Date Lost <span class="text-danger">*</span></label>
-                                <input type="date" class="form-control" id="dateLost" name="date_lost" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>" required>
+                                <input type="date" class="form-control" id="dateLost" name="date_lost" value="<?= date('Y-m-d') ?>" required>
                                 <div class="invalid-feedback">Please select the approximate date the item was lost.</div>
                             </div>
 

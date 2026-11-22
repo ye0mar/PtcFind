@@ -25,6 +25,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (empty($fullName) || empty($username) || empty($password)) {
             set_flash('error', 'Please fill in all required user fields.');
+        } elseif (strlen($password) < 6) {
+            set_flash('error', 'Password must be at least 6 characters long.');
         } else {
             try {
                 $hash = password_hash($password, PASSWORD_DEFAULT);
@@ -91,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Fetch all users
-$users = $pdo->query("SELECT * FROM users ORDER BY created_at DESC")->fetchAll();
+$users = $pdo->query("SELECT * FROM users ORDER BY created_at DESC, id DESC")->fetchAll();
 
 $pageTitle = 'Manage Users';
 require_once __DIR__ . '/../includes/header.php';

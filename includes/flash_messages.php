@@ -4,9 +4,8 @@
  * FoundU - Lost & Found Management System
  */
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+require_once __DIR__ . '/functions.php';
+foundu_start_session();
 
 /**
  * Set a flash message.

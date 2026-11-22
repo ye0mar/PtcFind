@@ -11,7 +11,7 @@ require_once __DIR__ . '/functions.php';
  */
 function ensure_notifications_table(PDO $pdo): void {
     static $checked = false;
-    if ($checked) {
+    if ($checked || $pdo->inTransaction()) {
         return;
     }
 
@@ -22,7 +22,7 @@ function ensure_notifications_table(PDO $pdo): void {
           `sender_user_id` INT(11) UNSIGNED NOT NULL,
           `sender_role` ENUM('admin','staff') NOT NULL,
           `related_item_id` INT(11) UNSIGNED NOT NULL,
-          `related_item_type` ENUM('lost_item','found_item') NOT NULL,
+          `related_item_type` ENUM('lost_item','found_item','returned_item') NOT NULL,
           `title` VARCHAR(160) NOT NULL,
           `message` TEXT NOT NULL,
           `is_read` TINYINT(1) NOT NULL DEFAULT 0,
@@ -37,11 +37,21 @@ function ensure_notifications_table(PDO $pdo): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
 
+    try {
+        $colStmt = $pdo->query("SHOW COLUMNS FROM `notifications` LIKE 'related_item_type'");
+        $colInfo = $colStmt ? $colStmt->fetch() : null;
+        if ($colInfo && isset($colInfo['Type']) && stripos((string)$colInfo['Type'], 'returned_item') === false) {
+            $pdo->exec("ALTER TABLE `notifications` MODIFY COLUMN `related_item_type` ENUM('lost_item','found_item','returned_item') NOT NULL");
+        }
+    } catch (Exception $e) {
+        // Ignore if database user lacks ALTER privilege or table already updated
+    }
+
     $checked = true;
 }
 
 /**
- * Create role-based notifications when a Lost Item or Found Item is created.
+ * Create role-based notifications when a Lost Item, Found Item, or Returned Item is created.
  * STAFF -> notifies active ADMIN accounts.
  * ADMIN -> notifies active STAFF accounts.
  * Never notifies the sender and prevents duplicate notifications.
@@ -55,7 +65,7 @@ function create_role_item_notifications(
 ): int {
     ensure_notifications_table($pdo);
 
-    if (!in_array($relatedItemType, ['lost_item', 'found_item'], true) || $senderUserId <= 0 || $relatedItemId <= 0) {
+    if (!in_array($relatedItemType, ['lost_item', 'found_item', 'returned_item'], true) || $senderUserId <= 0 || $relatedItemId <= 0) {
         return 0;
     }
 
@@ -86,9 +96,19 @@ function create_role_item_notifications(
         return 0;
     }
 
-    $itemLabel = ($relatedItemType === 'lost_item') ? 'Lost Item' : 'Found Item';
-    $title = 'New Item Added';
-    $message = "{$senderName} has added a new {$itemLabel}.";
+    if ($relatedItemType === 'lost_item') {
+        $itemLabel = 'Lost Item';
+        $title = 'New Item Added';
+        $message = "{$senderName} has added a new {$itemLabel}.";
+    } elseif ($relatedItemType === 'found_item') {
+        $itemLabel = 'Found Item';
+        $title = 'New Item Added';
+        $message = "{$senderName} has added a new {$itemLabel}.";
+    } else {
+        $itemLabel = 'Returned Item';
+        $title = 'Item Returned';
+        $message = "{$senderName} recorded a returned item handover.";
+    }
 
     $insertStmt = $pdo->prepare(
         "INSERT IGNORE INTO notifications
@@ -138,20 +158,23 @@ function get_unread_notification_count(int $userId): int {
  */
 function get_user_notifications(PDO $pdo, int $userId, int $limit = 100, int $afterId = 0): array {
     ensure_notifications_table($pdo);
+    ensure_returned_items_table($pdo);
 
     $sql = "SELECT n.*,
                    u.full_name AS sender_name,
                    u.username AS sender_username,
-                   COALESCE(l.item_name, f.item_name) AS related_item_name,
+                   COALESCE(l.item_name, f.item_name, r.item_name) AS related_item_name,
                    CASE
                        WHEN n.related_item_type = 'lost_item' THEN (l.id IS NOT NULL)
                        WHEN n.related_item_type = 'found_item' THEN (f.id IS NOT NULL)
+                       WHEN n.related_item_type = 'returned_item' THEN (r.id IS NOT NULL)
                        ELSE 0
                    END AS item_exists
             FROM notifications n
             LEFT JOIN users u ON n.sender_user_id = u.id
             LEFT JOIN lost_items l ON (n.related_item_type = 'lost_item' AND n.related_item_id = l.id)
             LEFT JOIN found_items f ON (n.related_item_type = 'found_item' AND n.related_item_id = f.id)
+            LEFT JOIN returned_items r ON (n.related_item_type = 'returned_item' AND n.related_item_id = r.id)
             WHERE n.recipient_user_id = :uid";
 
     if ($afterId > 0) {
@@ -210,8 +233,12 @@ function mark_all_notifications_read(PDO $pdo, int $userId): int {
  */
 function get_notification_item_url(array $notification): string {
     $itemId = (int)($notification['related_item_id'] ?? 0);
-    if (($notification['related_item_type'] ?? '') === 'lost_item') {
+    $type = $notification['related_item_type'] ?? '';
+    if ($type === 'lost_item') {
         return base_url('lost_items/view.php?id=' . $itemId);
+    }
+    if ($type === 'returned_item') {
+        return base_url('returned_items/view.php?id=' . $itemId);
     }
     return base_url('found_items/view.php?id=' . $itemId);
 }

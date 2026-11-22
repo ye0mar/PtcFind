@@ -4,22 +4,8 @@
  * FoundU - Lost & Found Management System
  */
 
-if (session_status() === PHP_SESSION_NONE) {
-    @ini_set('session.gc_maxlifetime', '86400');
-    @ini_set('session.cookie_lifetime', '86400');
-    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && stripos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false);
-    session_set_cookie_params([
-        'lifetime' => 86400,
-        'path'     => '/',
-        'httponly' => true,
-        'secure'   => $isHttps,
-        'samesite' => $isHttps ? 'None' : 'Lax',
-    ]);
-    session_start();
-}
-
 require_once __DIR__ . '/functions.php';
+foundu_start_session();
 require_once __DIR__ . '/flash_messages.php';
 require_once __DIR__ . '/csrf.php';
 

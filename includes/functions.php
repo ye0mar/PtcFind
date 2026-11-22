@@ -7,6 +7,26 @@
 require_once __DIR__ . '/../config/database.php';
 
 /**
+ * Initialize PHP session with consistent secure cookie parameters.
+ */
+function foundu_start_session(): void {
+    if (session_status() === PHP_SESSION_NONE) {
+        @ini_set('session.gc_maxlifetime', '86400');
+        @ini_set('session.cookie_lifetime', '86400');
+        $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && stripos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false);
+        session_set_cookie_params([
+            'lifetime' => 86400,
+            'path'     => '/',
+            'httponly' => true,
+            'secure'   => $isHttps,
+            'samesite' => $isHttps ? 'None' : 'Lax',
+        ]);
+        session_start();
+    }
+}
+
+/**
  * Sanitize string output for safe HTML display.
  */
 function sanitize(?string $data): string {
@@ -105,7 +125,7 @@ function base_url(string $path = ''): string {
             if ($scriptDir === '.') {
                 $scriptDir = '';
             }
-            $subfolders = ['lost_items', 'found_items', 'matches', 'admin', 'profile', 'setup', 'notifications'];
+            $subfolders = ['lost_items', 'found_items', 'matches', 'returned_items', 'admin', 'profile', 'setup', 'notifications'];
             $pattern = '#/(' . implode('|', $subfolders) . ')$#';
             if (preg_match($pattern, $scriptDir)) {
                 $scriptDir = (string)preg_replace($pattern, '', $scriptDir);
@@ -237,3 +257,73 @@ function delete_uploaded_image(?string $relativePath): void {
         @unlink($targetFile);
     }
 }
+
+/**
+ * Copy an existing uploaded image into a new independent file inside uploads/.
+ */
+function copy_uploaded_image(?string $relativePath, string $prefix = 'item_'): ?string {
+    if (!item_image_exists($relativePath)) {
+        return null;
+    }
+    $uploadsDir = realpath(__DIR__ . '/../uploads');
+    $sourceFile = realpath(__DIR__ . '/../' . ltrim((string)$relativePath, '/'));
+    if (!$uploadsDir || !$sourceFile) {
+        return null;
+    }
+    $ext = strtolower(pathinfo($sourceFile, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+        return null;
+    }
+    $newFilename = $prefix . time() . '_' . bin2hex(random_bytes(6)) . '.' . $ext;
+    $targetFile = $uploadsDir . DIRECTORY_SEPARATOR . $newFilename;
+    if (@copy($sourceFile, $targetFile)) {
+        return 'uploads/' . $newFilename;
+    }
+    return null;
+}
+
+/**
+ * Ensure the returned_items table exists (safe idempotent DDL for existing databases).
+ */
+function ensure_returned_items_table(PDO $pdo): void {
+    static $checked = false;
+    if ($checked || $pdo->inTransaction()) {
+        return;
+    }
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS `returned_items` (
+          `id` INT(11) UNSIGNED NOT NULL AUTO_INCREMENT,
+          `lost_item_id` INT(11) UNSIGNED DEFAULT NULL,
+          `found_item_id` INT(11) UNSIGNED DEFAULT NULL,
+          `match_id` INT(11) UNSIGNED DEFAULT NULL,
+          `item_name` VARCHAR(150) NOT NULL,
+          `category_id` INT(11) UNSIGNED DEFAULT NULL,
+          `description` TEXT,
+          `item_image_path` VARCHAR(255) DEFAULT NULL,
+          `receiver_name` VARCHAR(120) NOT NULL,
+          `receiver_contact` VARCHAR(180) DEFAULT NULL,
+          `date_returned` DATE NOT NULL,
+          `proof_image_path` VARCHAR(255) NOT NULL,
+          `notes` TEXT,
+          `recorded_by` INT(11) UNSIGNED NOT NULL,
+          `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          `updated_at` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uniq_returned_lost_item` (`lost_item_id`),
+          UNIQUE KEY `uniq_returned_found_item` (`found_item_id`),
+          KEY `idx_date_returned` (`date_returned`),
+          KEY `idx_category` (`category_id`),
+          KEY `idx_match` (`match_id`),
+          KEY `idx_recorded_by` (`recorded_by`),
+          CONSTRAINT `fk_returned_lost` FOREIGN KEY (`lost_item_id`) REFERENCES `lost_items` (`id`) ON DELETE SET NULL,
+          CONSTRAINT `fk_returned_found` FOREIGN KEY (`found_item_id`) REFERENCES `found_items` (`id`) ON DELETE SET NULL,
+          CONSTRAINT `fk_returned_match` FOREIGN KEY (`match_id`) REFERENCES `matches` (`id`) ON DELETE SET NULL,
+          CONSTRAINT `fk_returned_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL,
+          CONSTRAINT `fk_returned_recorder` FOREIGN KEY (`recorded_by`) REFERENCES `users` (`id`) ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
+    $checked = true;
+}
+
